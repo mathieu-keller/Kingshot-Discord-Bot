@@ -78,7 +78,7 @@ class GiftCodeAPI:
                     
             for code_row in codes:
                 code = code_row[0]
-                status = await self.bot.get_cog('GiftOperations').claim_giftcode_rewards_wos("244886619", code)
+                status = await self.bot.get_cog('GiftOperations').claim_giftcode_rewards_wos("27370737", code)
                 
                 if status in ["TIME_ERROR", "CDK_NOT_FOUND", "USAGE_LIMIT"]:
                     await self.remove_giftcode(code, from_validation=True)

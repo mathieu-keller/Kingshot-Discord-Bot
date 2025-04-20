@@ -2,15 +2,14 @@
 
 What does it look like? A cheap reskin of the Whiteout Survival Bot that Relo made, adapted for Kingshot. No more, no less. Enjoy, and if it doesn't work, blame the server hamsters!
 
-I even left the original readme below, in case you want to learn about the bot...
-
 ## 🔄 Changes for Kingshot
 - All redemption requests now point to kingshot-giftcode.centurygame.com
 - Updated the old secret key to the new super-secret key (thanks Bahraini)
 - Change auto-update references to use this Github repository instead (avoid Whiteout Bot changes overriding Kingshot changes)
 - Removed the fallback to wosland.com autoupdateinfo if Github cannot be reached (see above)
+- Reset the version numbering in autoupdateinto to V1.0
 
-Original readme below...
+I left the original readme below, in case you want to learn about the bot...
 
 # V4 Mass Update List (25.02.2025)
 

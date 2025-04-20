@@ -1149,19 +1149,19 @@ class AllianceMemberOperations(commands.Cog):
 
                         connector = aiohttp.TCPConnector(ssl=ssl_context)
                         async with aiohttp.ClientSession(connector=connector) as session:
-                            async with session.post('https://ks-giftcode.centurygame.com/api/player', headers=headers, data=form) as response:
+                            async with session.post('https://kingshot-giftcode.centurygame.com/api/player', headers=headers, data=form) as response:
                                 with open(log_file_path, 'a', encoding='utf-8') as log_file:
                                     log_file.write(f"\nAPI Response for FID {fid}:\n")
                                     log_file.write(f"Status Code: {response.status}\n")
                                 
                                 if response.status == 429:
                                     with open(log_file_path, 'a', encoding='utf-8') as log_file:
-                                        log_file.write("Rate Limit exceeded - Waiting 60 seconds\n")
+                                        log_file.write("Rate Limit exceeded - Waiting 30 seconds\n")
                                     
-                                    embed.description = "⚠️ API rate limit reached. Waiting for 60 seconds..."
+                                    embed.description = "⚠️ API rate limit reached. Waiting for 30 seconds..."
                                     embed.color = discord.Color.orange()
                                     await message.edit(embed=embed)
-                                    await asyncio.sleep(60)
+                                    await asyncio.sleep(30)
                                     embed.description = f"Processing {total_users} members...\n\n**Progress:** `{index + 1}/{total_users}`"
                                     embed.color = discord.Color.blue()
                                     await message.edit(embed=embed)

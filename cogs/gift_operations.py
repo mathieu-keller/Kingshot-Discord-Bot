@@ -148,7 +148,7 @@ class GiftOperations(commands.Cog):
                 await message.reply(embed=error_embed, mention_author=False)
                 return
 
-            initial_check = await self.claim_giftcode_rewards_wos("244886619", giftcode)
+            initial_check = await self.claim_giftcode_rewards_wos("27370737", giftcode)
             
             if initial_check == "USAGE_LIMIT":
                 await message.add_reaction("❌")
@@ -290,7 +290,7 @@ class GiftOperations(commands.Cog):
         try:
             log_file_path = os.path.join(self.log_directory, 'giftlog.txt')
             
-            if player_id != "244886619":
+            if player_id != "27370737":
                 self.cursor.execute("""
                     SELECT status FROM user_giftcodes 
                     WHERE fid = ? AND giftcode = ?
@@ -349,7 +349,7 @@ class GiftOperations(commands.Cog):
                 else:
                     status = "ERROR"
 
-                if player_id != "244886619" and status in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE"]:
+                if player_id != "27370737" and status in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE"]:
                     try:
                         self.cursor.execute("""
                             INSERT OR REPLACE INTO user_giftcodes (fid, giftcode, status)
@@ -440,10 +440,10 @@ class GiftOperations(commands.Cog):
                         continue
 
                     try:
-                        session, response_stove_info = self.get_stove_info_wos(player_id="244886619")
+                        session, response_stove_info = self.get_stove_info_wos(player_id="27370737")
                         
                         if response_stove_info.json().get("msg") == "success":
-                            response_status = await self.claim_giftcode_rewards_wos("244886619", giftcode)
+                            response_status = await self.claim_giftcode_rewards_wos("27370737", giftcode)
 
                             if response_status == "USAGE_LIMIT":
                                 description = (
@@ -540,7 +540,7 @@ class GiftOperations(commands.Cog):
                             elif response_status == "TIMEOUT_RETRY":
                                 await message.add_reaction("⏳")
                                 await asyncio.sleep(60)
-                                _, retry_response = self.claim_giftcode_rewards_wos("244886619", giftcode)
+                                _, retry_response = self.claim_giftcode_rewards_wos("27370737", giftcode)
                                 await message.remove_reaction("⏳", self.bot.user)
                                 if retry_response in ["SUCCESS", "ALREADY_RECEIVED", "SAME TYPE EXCHANGE"]:
                                     self.cursor.execute("SELECT 1 FROM gift_codes WHERE giftcode = ?", (giftcode,))
@@ -595,7 +595,7 @@ class GiftOperations(commands.Cog):
             
             for code in all_codes:
                 giftcode = code[0]
-                status = await self.claim_giftcode_rewards_wos("244886619", giftcode)
+                status = await self.claim_giftcode_rewards_wos("27370737", giftcode)
                 
                 if status in ["TIME_ERROR", "CDK_NOT_FOUND", "USAGE_LIMIT"]:
                     await self.api.remove_giftcode(giftcode, from_validation=True)
@@ -631,7 +631,7 @@ class GiftOperations(commands.Cog):
             print(f"Error in validate_gift_codes: {str(e)}")
 
     async def handle_success(self, message, giftcode):
-        status = await self.claim_giftcode_rewards_wos("244886619", giftcode)
+        status = await self.claim_giftcode_rewards_wos("27370737", giftcode)
         
         if status in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE"]:
             self.cursor.execute("SELECT 1 FROM gift_codes WHERE giftcode = ?", (giftcode,))
@@ -655,7 +655,7 @@ class GiftOperations(commands.Cog):
             await message.reply("Usage limit has been reached for this code.", mention_author=False)
 
     async def handle_already_received(self, message, giftcode):
-        status = await self.claim_giftcode_rewards_wos("244886619", giftcode)
+        status = await self.claim_giftcode_rewards_wos("27370737", giftcode)
         
         if status in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE"]:
             self.cursor.execute("SELECT 1 FROM gift_codes WHERE giftcode = ?", (giftcode,))
@@ -1572,7 +1572,7 @@ class GiftOperations(commands.Cog):
 
             await asyncio.sleep(0)
 
-            initial_check = await self.claim_giftcode_rewards_wos("244886619", giftcode)
+            initial_check = await self.claim_giftcode_rewards_wos("27370737", giftcode)
             if initial_check == "USAGE_LIMIT":
                 usage_limit_embed = discord.Embed(
                     title="❌ Gift Code Usage Limit Reached",
@@ -1882,7 +1882,7 @@ class CreateGiftCodeModal(discord.ui.Modal):
         code = self.giftcode.value
         
         try:
-            status = await self.cog.claim_giftcode_rewards_wos("244886619", code)
+            status = await self.cog.claim_giftcode_rewards_wos("27370737", code)
             
             if status in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE"]:
                 self.cog.cursor.execute("SELECT 1 FROM gift_codes WHERE giftcode = ?", (code,))

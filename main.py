@@ -93,15 +93,8 @@ if __name__ == "__main__":
                 else:
                     raise requests.RequestException
             except requests.RequestException:
-                print(Fore.YELLOW + "Cannot connect to GitHub, trying alternative source (wosland.com)..." + Style.RESET_ALL)
-                alt_version_url = "https://wosland.com/wosdc/autoupdateinfo.txt"
-                response = requests.get(alt_version_url)
-                if response.status_code == 200:
-                    source_url = "https://wosland.com/wosdc"
-                    print(Fore.GREEN + "Connected to wosland.com successfully." + Style.RESET_ALL)
-                else:
-                    print(Fore.RED + "Failed to connect to both GitHub and wosland.com" + Style.RESET_ALL)
-                    return False
+                print(Fore.YELLOW + "Cannot connect to GitHub to download update information, please check your connection..." + Style.RESET_ALL)
+                return False
 
             if not os.path.exists('cogs'):
                 os.makedirs('cogs')

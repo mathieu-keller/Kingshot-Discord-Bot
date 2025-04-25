@@ -1,6 +1,5 @@
-# What the heck is this?
-
-A: What does it look like? A cheap reskin of the Whiteout Survival Bot that [Relo](https://github.com/Reloisback) made, adapted for [Kingshot](https://www.centurygames.com/games/kingshot/). No more, no less.
+# Kingshot Discord Bot
+A cheap reskin of the Whiteout Survival Bot that [Relo](https://github.com/Reloisback) made, adapted for [Kingshot](https://www.centurygames.com/games/kingshot/). No more, no less.
 
 Enjoy, and if it doesn't work, blame the server hamsters!
 
@@ -9,13 +8,17 @@ Enjoy, and if it doesn't work, blame the server hamsters!
 - Updated the old secret key to the new super-secret key (thanks Bahraini)
 - Change auto-update references to use this Github repository instead (avoid Whiteout Bot changes overriding Kingshot changes)
 - Removed the fallback to wosland.com autoupdateinfo if Github cannot be reached (see above)
-- Reset the version numbering in autoupdateinto to V1.0
+- Reset the version numbering in autoupdateinfo to V1.0
 - Reduced wait time after API "rate limit" hit to 30s by default
 - Changed ID used to verify gift codes to a KS Player ID 27370737
 - Removed the gift code retrieval from Relo's external gift code API
 
-## 🛠️ Changes for Kingshot
+## 🛠️ Fixes for Kingshot
 - Added the fix from my [PR #26](https://github.com/Reloisback/Whiteout-Survival-Discord-Bot/pull/26) to view/edit/delete with 25+ events
+
+## 📝 Upcoming Features
+- Implementing fixed days scheduling for events (eg. every Tuesday, Thursday, Sunday)
+- Pulling in additional fixes from the original bot PRs
 
 You can find the original readme below, so that you can learn about the bot and how to install it...
 

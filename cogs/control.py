@@ -368,11 +368,7 @@ class Control(commands.Cog):
                         new_interval = result[0]
                         if new_interval != current_interval:
                             print(f"[CONTROL] Interval changed for alliance {alliance_id}: {current_interval} -> {new_interval}")
-                            self.is_running[alliance_id] = False
-                            self.alliance_tasks[alliance_id] = asyncio.create_task(
-                                self.schedule_alliance_check(channel, alliance_id, new_interval)
-                            )
-                            break
+                            current_interval = new_interval
 
                     await self.control_queue.put({
                         'channel': channel,

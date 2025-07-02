@@ -1,36 +1,11 @@
-# What the heck is this?
+# Kingshot Discord Bot
+Discord Bot for [Kingshot](https://www.centurygames.com/games/kingshot/). Features include automated gift code redemption, notifications for events, alliance member tracking, Player ID input and more.
 
-A: What does it look like? A cheap reskin of the Whiteout Survival Bot that [Relo](https://github.com/Reloisback) made, adapted for [Kingshot](https://www.centurygames.com/games/kingshot/). No more, no less.
+It is essentially a reskin of the Whiteout Survival Bot that [Relo](https://github.com/Reloisback) made.
 
 Enjoy, and if it doesn't work, blame the server hamsters!
 
-## 🔄 Changes for Kingshot
-- All redemption requests now point to kingshot-giftcode.centurygame.com
-- Updated the old secret key to the new super-secret key (thanks Bahraini)
-- Change auto-update references to use this Github repository instead (avoid Whiteout Bot changes overriding Kingshot changes)
-- Removed the fallback to wosland.com autoupdateinfo if Github cannot be reached (see above)
-- Reset the version numbering in autoupdateinto to V1.0
-- Reduced wait time after API "rate limit" hit to 30s by default
-- Changed ID used to verify gift codes to a KS Player ID 27370737
-- Removed the gift code retrieval from Relo's external gift code API
-
-## 🛠️ Changes for Kingshot
-- Added the fix from my [PR #26](https://github.com/Reloisback/Whiteout-Survival-Discord-Bot/pull/26) to view/edit/delete with 25+ events
-
-You can find the original readme below, so that you can learn about the bot and how to install it...
-
-
-
-# V4 Mass Update List (25.02.2025)
-
-Since the release of V4, we've implemented numerous changes and improvements. Here's a comprehensive overview of the latest updates:
-
-## 🛠️ Bug Fixes & Improvements
-- 90% of reported issues on Discord have been resolved
-- Continuous maintenance and bug fixing
-- Implementing user-requested custom features
-
-## 🎁 Gift Code System
+### 🎁 Gift Code System
 - Introduced new Gift Code API system
 - Shared gift code database for easier management
 - Automatic expired code cleanup
@@ -38,7 +13,7 @@ Since the release of V4, we've implemented numerous changes and improvements. He
   - Automatically detects and applies codes for all members
   - Customizable periodic alliance checks
 
-## 📢 Notification System
+### 📢 Notification System
 - Unlimited custom notifications
 - Flexible timing configuration
 - Multiple notification intervals
@@ -54,7 +29,7 @@ Since the release of V4, we've implemented numerous changes and improvements. He
 - Web interface for notification management
   - Visit: [wosland.com/notification](https://wosland.com/notification)
 
-## 💾 Backup System
+### 💾 Backup System
 - Automatic database backup
 - Secure encrypted backups (.zip format)
 - Personal encryption key system
@@ -63,127 +38,40 @@ Since the release of V4, we've implemented numerous changes and improvements. He
   - Only member IDs are stored
   - Encrypted access
 
-## 🆔 ID Channel System
+### 🆔 ID Channel System
 - Automatic alliance member addition
 - Discord channel integration
 - Duplicate entry prevention
 - Comprehensive logging system
 
-## ⚙️ Additional Features
+### ⚙️ Additional Features
 - Alliance Control Messages toggle in Bot Operations menu
 - Customizable progress notifications
 - Enhanced user experience
 
-## 🌟 Support & Community
+### 🌟 Support & Community
 Join our Discord community for:
 - Direct support
 - Feature requests
 - Updates and announcements
 - [Join Discord Server](https://discord.gg/h8w6N6my4a)
 
-## 🔄 Ongoing Development
-We continue to:
-- Implement user feedback
-- Fix reported issues
-- Add new features
-- Improve system stability
+### 🔄 Changes for Kingshot
+- All redemption requests now point to kingshot-giftcode.centurygame.com
+- Updated the old secret key to the new super-secret key (thanks Bahraini)
+- Change auto-update references to use this Github repository instead (avoid Whiteout Bot changes overriding Kingshot changes)
+- Removed the fallback to wosland.com autoupdateinfo if Github cannot be reached (see above)
+- Reset the version numbering in autoupdateinfo to V1.0
+- Reduced wait time after API "rate limit" hit to 30s by default
+- Changed ID used to verify gift codes to a KS Player ID 27370737
+- Removed the gift code retrieval from Relo's external gift code API
 
-Have a great day! 
+### 🛠️ Fixes for Kingshot
+- Added the fix from my [PR #26](https://github.com/Reloisback/Whiteout-Survival-Discord-Bot/pull/26) to view/edit/delete with 25+ events
 
----
-*For more information and support, visit our [Discord Server](https://discord.gg/h8w6N6my4a)*
-
-# V4 UPDATED
-
-- Let's talk a little bit about V4
-  - Scroll down to the bottom of the page to read the functions of the Menus
-- First of all, those who will set up a discord bot for the first time can watch the youtube video by clicking [FULL HERE](https://www.youtube.com/watch?v=SwbOOij8wFY)
-  
-  - In version V4 we have 2 codes
-1. Our code is /settings. As soon as you use this in the first installation, you will be set as the main administrator
-2. Our code is /w command, this command is for ID Check
-
-- In V4, python library installation, updates, etc. everything is automated
-- We even have a system that checks for expired gift codes with hidden checks and deletes them from the database
-- There are many features here that I cannot fully explain
-  
-  ##### REMEMBER USE PYTHON VERSION 3.12.4
-  
-  # About me: 
-
-# White of Survival Discord Bot
-
-## 👋 Welcome!
-Thank you for using our Discord bot. This bot is designed to help manage your White of Survival alliance efficiently and effectively.
-
-## 🆘 Support Information
-
-### Need Help?
-If you're experiencing any issues or need assistance with the bot, we're here to help!
-
-### 📞 Contact Methods
-- **Discord Server:** [Join Our Community](https://discord.gg/h8w6N6my4a)
-- **Developer:** Reloisback
-- **Direct Support:** Feel free to message me on Discord
-
-## 💝 Support the Project
-
-### Always Free
-This bot was created and published by Reloisback and will **ALWAYS BE FREE**. We believe in providing quality tools accessible to everyone.
-
-### ☕ Buy Me a Coffee
-If you'd like to support the development:
-- [Buy Me a Coffee](https://www.buymeacoffee.com/reloisback)
-- Your support helps maintain and improve the bot
-
-## 🔓 Open Source
-Our bot's source code is 100% open source. We believe in transparency and community-driven development.
-
-## 💌 Final Note
-Thank you for being part of our community! Your support and feedback help make this bot better for everyone.
-
-Feel free to reach out anytime - we're always happy to help!
-
----
-*Made with ❤️ by Reloisback*
-
-
-# 👨‍💻 About the Developer
-
-## Personal Introduction
-I'm Umut, a 27-year-old developer specializing in Python and PHP. While I used to be an avid gamer, my responsibilities as a family provider have shifted my priorities, leaving limited time for gaming.
-
-## 🤖 Bot's Journey
-White of Survival bot started as a fun project for my own alliance. Upon realizing there wasn't anything similar available, I decided to develop it further and share it with the community. You're currently experiencing Version 4, following successful releases of V1, V2, and V3.
-
-The development process has been intense, ranging from 1-2 hours some days to marathon 14-15 hour coding sessions.
-
-## 💭 Why Free?
-I'm often asked why I keep this bot free. The answer is simple: accessibility. If monetized, the user base would shrink from thousands to perhaps just 10-15 users. Having experienced financial constraints myself, I understand the importance of making useful tools available to everyone, regardless of their financial situation.
-
-## 🤝 Support & Development
-For those who can and wish to support the project, you can use the [☕ Buy me a coffee](https://www.buymeacoffee.com/reloisback) link. These contributions help cover development costs:
-- Proxy servers
-- Testing environments
-- Server maintenance
-- Development tools
-
-## 💝 Final Words
-To those unable to provide financial support - thank you for using the bot! Support has never been and will never be mandatory. This project will remain free forever.
-
-I love this community and thank you all for being part of this journey. ❤️
-
----
-
-### Quick Links
-- [Discord Server](https://discord.gg/h8w6N6my4a)
-- [Support Page](https://www.buymeacoffee.com/reloisback)
-- Discord: Reloisback
-
-*Made with passion and dedication for the White of Survival community* ❤️
-
-
-# WOS Discord Bot V4 Documentation
+### 📝 Upcoming Features
+- Implementing fixed days scheduling for events (eg. every Tuesday, Thursday, Sunday)
+- Pulling in additional fixes from the original bot PRs
 
 ## Main Menu Buttons
 
@@ -227,7 +115,6 @@ I love this community and thank you all for being part of this journey. ❤️
 ### 👀 View Alliances
 - Shows your alliance lists, how many members it has and how often it is checked
 
-
 ## 👥 Member Operations Menu
 
 ### ➕ Add Members
@@ -243,8 +130,6 @@ I love this community and thank you all for being part of this journey. ❤️
 ### 📋 View Members
 - When you press it, it asks you to choose an alliance,
 - Then shows the members of the alliance
-
-
 
 ## 🤖 Bot Operations Menu
  > 90% of the buttons in this menu can only be used by the owner of the bot
@@ -275,7 +160,6 @@ I love this community and thank you all for being part of this journey. ❤️
 
 - This feature allows you to delete the alliance management that you have specifically assigned to the admins
 
-
 ### 🔄 Transfer Old Database
 
 - For those who use V2 or V3, it is made to transfer the old database to the V4 database
@@ -293,7 +177,6 @@ I love this community and thank you all for being part of this journey. ❤️
 - Shows the actions of the administrators who add or delete members on that channel
 
 ## 🎁 Gift Code Operations
-
 
 ### 🎫 Create Gift Code
 
@@ -331,7 +214,6 @@ I love this community and thank you all for being part of this journey. ❤️
 
 - Prompts you to choose an alliance and a gift code, then redeems the gift code for everyone in that alliance
 
-
 ## 📝 Alliance History Menu
 
 ### 🔥 Furnace Changes
@@ -345,72 +227,3 @@ I love this community and thank you all for being part of this journey. ❤️
 - Pressing this button opens the alliance list
 - After selecting an alliance, the alliance member list will appear, displaying the history of Nickname Changes of the selected member
 - Or you can enter a number between 1 and 24 hours to see all alliance members who made changes within this interval
-
-
-# General Features
-
-
-## Everything in one place
-
-- In the V4 version, Bot has integrated every feature into a single menu
-- More stable and faster
-- More details are included
-- Details are given in the embed message for all your transactions
-
-## Automatic Update System
-
-- We have activated automatic update in version V4
-- User will receive a warning when starting the bot if there is an update
-- Within this warning you will see what has changed
-- If he agrees, these changes will be implemented automatically
-### Real-time Progress Tracking
-- Live updates via embeds
-- Color-coded status indicators:
-  - 🔵 Blue: In Progress
-  - 🟠 Orange: Rate Limited
-  - 🟢 Green: Completed
-  - 🔴 Red: Error
-
-### Error Handling
-- Rate limit detection
-- API error management
-- Database error handling
-- User-friendly error messages
-
-### Logging System
-- Automatic log directory creation
-- Detailed operation logs
-- Timestamp tracking
-- Success/Failure records
-
-### Database Management
-- Multiple SQLite databases:
-  - alliance.sqlite: Alliance data
-  - users.sqlite: Member information
-  - settings.sqlite: Bot configuration
-  - giftcode.sqlite: Gift code records
-
-
-
-# White of Survival Discord Bot - Screenshots
-
-## Bot Interface Screenshots
-
-![Screenshot1](pictures/Screenshot_1.png)
-![Screenshot2](pictures/Screenshot_2.png)
-![Screenshot3](pictures/Screenshot_3.png)
-![Screenshot4](pictures/Screenshot_4.png)
-![Screenshot5](pictures/Screenshot_5.png)
-![Screenshot6](pictures/Screenshot_6.png)
-![Screenshot7](pictures/Screenshot_7.png)
-![Screenshot8](pictures/Screenshot_8.png)
-![Screenshot9](pictures/Screenshot_9.png)
-![Screenshot10](pictures/Screenshot_10.png)
-![Screenshot11](pictures/Screenshot_11.png)
-
----
-
-
-
-
-

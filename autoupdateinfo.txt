@@ -1,6 +1,6 @@
 Version= V1.0
 Documants;
-main.py = V1.0
+main.py = V1.1
 cogs/alliance.py = V1.0
 cogs/alliance_member_operations.py = V1.0
 cogs/bot_operations.py = V1.0

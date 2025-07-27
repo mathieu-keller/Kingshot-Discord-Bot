@@ -46,7 +46,6 @@ if __name__ == "__main__":
     from colorama import Fore, Style, init
     import requests
     import asyncio
-    import pkg_resources
     import shutil
     import zipfile
     from datetime import datetime

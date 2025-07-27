@@ -8,3 +8,5 @@
 !cogs/
 !cogs/*.py
 !.gitlab-ci.yml
+!install/
+!install/*

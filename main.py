@@ -83,7 +83,7 @@ if __name__ == "__main__":
     UPDATE_SOURCES = [
         {
             "name": "GitHub",
-            "api_url": "https://api.github.com/repos/justncodes/Kingshot-Discord-Bot/releases/latest",
+            "api_url": "https://api.github.com/repos/kingshot-project/Kingshot-Discord-Bot/releases/latest",
             "primary": True
         }
     ]

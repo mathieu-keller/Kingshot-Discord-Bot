@@ -132,7 +132,6 @@ class GiftOperations(commands.Cog):
         )
 
         # Initialization of Locks and Cooldowns
-        self.captcha_solver = None
         self._validation_lock = asyncio.Lock()
         self.last_validation_attempt_time = 0
         self.validation_cooldown = 5
@@ -143,86 +142,11 @@ class GiftOperations(commands.Cog):
         self.validation_in_progress = False
         self.validation_queue_lock = asyncio.Lock()
         self.validation_queue_task = None
-        self.test_captcha_cooldowns = {} # User ID: last test timestamp for test button
-        self.test_captcha_delay = 60
 
         self.processing_stats = {
-        "ocr_solver_calls": 0,       # Times solver.solve_captcha was called
-        "ocr_valid_format": 0,     # Times solver returned success=True
-        "captcha_submissions": 0,  # Times a solved code was sent to API
-        "server_validation_success": 0, # Captcha accepted by server (not CAPTCHA_ERROR)
-        "server_validation_failure": 0, # Captcha rejected by server (CAPTCHA_ERROR)
         "total_fids_processed": 0,   # Count of completed claim_giftcode calls
         "total_processing_time": 0.0 # Sum of durations for completed calls
         }
-
-        # Captcha Solver Initialization Attempt
-        try:
-            self.settings_cursor.execute("""
-                CREATE TABLE IF NOT EXISTS ocr_settings (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    enabled INTEGER DEFAULT 1,
-                    save_images INTEGER DEFAULT 0
-                    -- Remove use_gpu and gpu_device columns if they existed
-                )""")
-            self.settings_conn.commit()
-
-            # Load latest OCR settings
-            self.settings_cursor.execute("SELECT enabled, save_images FROM ocr_settings ORDER BY id DESC LIMIT 1")
-            ocr_settings = self.settings_cursor.fetchone()
-
-            if ocr_settings:
-                enabled, save_images = ocr_settings
-                if enabled == 1:
-                    self.logger.info("GiftOps __init__: OCR is enabled. Initializing ONNX solver...")
-                    self.captcha_solver = GiftCaptchaSolver(save_images=save_images)
-                    if not self.captcha_solver.is_initialized:
-                        self.logger.error("GiftOps __init__: ONNX solver FAILED to initialize.")
-                        self.captcha_solver = None
-                    else:
-                        self.logger.info("GiftOps __init__: ONNX solver initialized successfully.")
-                else:
-                    self.logger.info("GiftOps __init__: OCR is disabled in settings.")
-            else:
-                self.logger.warning("GiftOps __init__: No OCR settings found in DB. Inserting defaults (Enabled=1, SaveImages=0).")
-                self.settings_cursor.execute("""
-                    INSERT INTO ocr_settings (enabled, save_images) VALUES (1, 0)
-                """)
-                self.settings_conn.commit()
-                self.logger.info("GiftOps __init__: Attempting initialization with default settings...")
-                self.captcha_solver = GiftCaptchaSolver(save_images=0)
-                if not self.captcha_solver.is_initialized:
-                    self.logger.error("GiftOps __init__: ONNX solver FAILED to initialize with defaults.")
-                    self.captcha_solver = None
-                else: # Ensure success is logged here for the CI
-                    self.logger.info("GiftOps __init__: ONNX solver initialized successfully.")
-
-        except ImportError as lib_err:
-            self.logger.exception(f"GiftOps __init__: ERROR - Missing required library for OCR (likely onnxruntime): {lib_err}. Captcha solving disabled.")
-            self.captcha_solver = None
-        except Exception as e:
-            self.logger.exception(f"GiftOps __init__: Unexpected error during Captcha solver setup: {e}")
-            self.logger.exception(f"Traceback: {traceback.format_exc()}")
-            self.captcha_solver = None
-
-        # Test FID Settings Table
-        try:
-            self.settings_cursor.execute("""
-                CREATE TABLE IF NOT EXISTS test_fid_settings (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    test_fid TEXT NOT NULL
-                )
-            """)
-            
-            self.settings_cursor.execute("SELECT test_fid FROM test_fid_settings ORDER BY id DESC LIMIT 1")
-            result = self.settings_cursor.fetchone()
-            
-            if not result: # Insert the default test FID if no entry exists
-                self.settings_cursor.execute("INSERT INTO test_fid_settings (test_fid) VALUES (?)", ("27370737",))
-                self.settings_conn.commit()
-                self.logger.info("Initialized default test FID (27370737) in database")
-        except Exception as e:
-            self.logger.exception(f"Error setting up test FID table: {e}")
 
     def clean_gift_code(self, giftcode):
         """Remove invisible Unicode characters (like RLM) that can contaminate gift codes"""
@@ -490,91 +414,11 @@ class GiftOperations(commands.Cog):
     async def on_ready(self):
         """
         Handles cog setup when the bot is ready.
-        Initializes database tables, loads OCR settings, initializes the captcha solver if enabled,
+        Initializes database tables,
         validates gift code channels, and starts the background task loop.
         """
         self.logger.info("GiftOps Cog: on_ready triggered.")
         try:
-            try:
-                self.logger.info("Checking ocr_settings table schema...")
-                conn_info = sqlite3.connect('db/settings.sqlite')
-                cursor_info = conn_info.cursor()
-                cursor_info.execute("PRAGMA table_info(ocr_settings)")
-                columns = [col[1] for col in cursor_info.fetchall()]
-                columns_to_drop = []
-                if 'use_gpu' in columns: columns_to_drop.append('use_gpu')
-                if 'gpu_device' in columns: columns_to_drop.append('gpu_device')
-                    
-                if columns_to_drop:
-                    sqlite_version = sqlite3.sqlite_version_info
-                    if sqlite_version >= (3, 35, 0):
-                        self.logger.info(f"Found old columns {columns_to_drop} in ocr_settings. SQLite version {sqlite3.sqlite_version} supports DROP COLUMN. Attempting removal.")
-                        for col_name in columns_to_drop:
-                            try:
-                                self.settings_cursor.execute(f"ALTER TABLE ocr_settings DROP COLUMN {col_name}")
-                                self.logger.info(f"Successfully dropped column: {col_name}")
-                            except Exception as drop_err:
-                                self.logger.error(f"Error dropping column {col_name}: {drop_err}")
-                        self.settings_conn.commit()
-                    else:
-                        self.logger.warning(f"Found old columns {columns_to_drop} in ocr_settings, but SQLite version {sqlite3.sqlite_version} (< 3.35.0) does not support DROP COLUMN easily. Columns will be ignored.")
-                else:
-                    self.logger.info("ocr_settings table schema is up to date.")
-                conn_info.close()
-            except Exception as schema_err:
-                self.logger.error(f"Error during ocr_settings schema check/cleanup: {schema_err}")
-
-            # OCR Settings Table Setup
-            self.logger.info("Setting up ocr_settings table (ensuring correct schema)...")
-            self.settings_cursor.execute("""
-                CREATE TABLE IF NOT EXISTS ocr_settings (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    enabled INTEGER DEFAULT 1,
-                    save_images INTEGER DEFAULT 0
-                )
-            """)
-            self.settings_conn.commit()
-            self.logger.info("ocr_settings table checked/created.")
-
-            # Initialize Default OCR Settings if Needed
-            self.settings_cursor.execute("SELECT COUNT(*) FROM ocr_settings")
-            count = self.settings_cursor.fetchone()[0]
-            if count == 0:
-                self.logger.info("No OCR settings found, inserting defaults (Enabled=1, SaveImages=0)...")
-                self.settings_cursor.execute("""
-                    INSERT INTO ocr_settings (enabled, save_images) VALUES (1, 0)
-                """)
-                self.settings_conn.commit()
-                self.logger.info("Default OCR settings inserted.")
-            else:
-                self.logger.info(f"Found {count} existing OCR settings row(s). Using the latest.")
-
-            # Load OCR Settings and Initialize Solver
-            if self.captcha_solver is None:
-                self.logger.warning("Captcha solver not initialized in __init__, attempting again in on_ready...")
-                self.settings_cursor.execute("SELECT enabled, save_images FROM ocr_settings ORDER BY id DESC LIMIT 1")
-                ocr_settings = self.settings_cursor.fetchone()
-
-                if ocr_settings:
-                    enabled, save_images_setting = ocr_settings
-                    self.logger.info(f"on_ready loaded settings: Enabled={enabled}, SaveImages={save_images_setting}")
-                    if enabled == 1:
-                        self.logger.info("OCR is enabled, attempting ONNX initialization...")
-                        try:
-                            self.captcha_solver = GiftCaptchaSolver(save_images=save_images_setting)
-                            if not self.captcha_solver.is_initialized:
-                                self.logger.error("ONNX solver FAILED to initialize in on_ready.")
-                                self.captcha_solver = None
-                        except Exception as e:
-                            self.logger.exception("Failed to initialize Captcha Solver in on_ready.")
-                            self.captcha_solver = None
-                    else:
-                        self.logger.info("OCR is disabled in settings (checked in on_ready).")
-                else:
-                    self.logger.warning("Could not load OCR settings from database in on_ready.")
-            else:
-                self.logger.info("Captcha solver was already initialized.")
-
             # Gift Code Channel Validation
             self.logger.info("Validating gift code channels...")
             self.cursor.execute("SELECT channel_id, alliance_id FROM giftcode_channel")
@@ -675,86 +519,37 @@ class GiftOperations(commands.Cog):
             except Exception as log_e:
                 self.logger.exception(f"GiftOps: CRITICAL - Failed to write on_message handler error log: {log_e}")
 
-    async def verify_test_fid(self, fid):
-        """
-        Verify that a FID is valid by attempting to login to the account.
-        
-        Args:
-            fid (str): The FID to verify
-            
-        Returns:
-            tuple: (is_valid, message) where is_valid is a boolean and message is a string
-        """
-        try:
-            self.logger.info(f"Verifying test FID: {fid}")
-            
-            session, response_stove_info = self.get_stove_info_wos(player_id=fid)
-            
-            try:
-                player_info_json = response_stove_info.json()
-            except json.JSONDecodeError:
-                self.logger.error(f"Invalid JSON response when verifying FID {fid}")
-                return False, "Invalid response from server"
-            
-            login_successful = player_info_json.get("msg") == "success"
-            
-            if login_successful:
-                try:
-                    nickname = player_info_json.get("data", {}).get("nickname", "Unknown")
-                    furnace_lv = player_info_json.get("data", {}).get("stove_lv", "Unknown")
-                    self.logger.info(f"Test FID {fid} is valid. Nickname: {nickname}, Level: {furnace_lv}")
-                    return True, "Valid account"
-                except Exception as e:
-                    self.logger.exception(f"Error parsing player info for FID {fid}: {e}")
-                    return True, "Valid account (but error getting details)"
-            else:
-                error_msg = player_info_json.get("msg", "Unknown error")
-                self.logger.info(f"Test FID {fid} is invalid. Error: {error_msg}")
-                return False, f"Login failed: {error_msg}"
-        
-        except Exception as e:
-            self.logger.exception(f"Error verifying test FID {fid}: {e}")
-            return False, f"Verification error: {str(e)}"
-
-    async def update_test_fid(self, new_fid):
-        """
-        Update the test FID in the database.
-        
-        Args:
-            new_fid (str): The new test FID
-            
-        Returns:
-            bool: True if update was successful, False otherwise
-        """
-        try:
-            self.logger.info(f"Updating test FID to: {new_fid}")
-            
-            self.settings_cursor.execute("""
-                INSERT INTO test_fid_settings (test_fid) VALUES (?)
-            """, (new_fid,))
-            self.settings_conn.commit()
-            
-            self.logger.info(f"Test FID updated successfully to {new_fid}")
-            return True
-        
-        except sqlite3.Error as db_err:
-            self.logger.exception(f"Database error updating test FID: {db_err}")
-            return False
-        except Exception as e:
-            self.logger.exception(f"Unexpected error updating test FID: {e}")
-            return False
 
     def get_test_fid(self):
         """
-        Get the current test FID from the database.
+        Get the best available FID for testing/validation.
+        
+        Priority:
+        1. Random alliance member FID (if any exist)
+        2. Default FID (27370737) as fallback
         
         Returns:
-            str: The current test FID, or the default "27370737" if not found
+            str: The FID to use for testing
         """
         try:
-            self.settings_cursor.execute("SELECT test_fid FROM test_fid_settings ORDER BY id DESC LIMIT 1")
-            result = self.settings_cursor.fetchone()
-            return result[0] if result else "27370737"
+            # First try: Use a random alliance member
+            with sqlite3.connect('db/users.sqlite') as users_conn:
+                users_cursor = users_conn.cursor()
+                users_cursor.execute("""
+                    SELECT fid FROM users 
+                    WHERE alliance IS NOT NULL AND alliance != '' 
+                    ORDER BY RANDOM() 
+                    LIMIT 1
+                """)
+                member = users_cursor.fetchone()
+                
+                if member:
+                    fid = member[0]
+                    return fid
+            
+            # Fallback: Use default FID
+            return "27370737"
+            
         except Exception as e:
             self.logger.exception(f"Error getting test FID: {e}")
             return "27370737"
@@ -762,30 +557,15 @@ class GiftOperations(commands.Cog):
     async def get_validation_fid(self):
         """Get the best available FID for gift code validation.
         
-        Hierarchy:
-        1. Configured test FID (if valid)
-        2. Random alliance member FID (if no test FID)
-        3. Default FID (27370737) as fallback
+        Priority:
+        1. Random alliance member FID (if any exist)
+        2. Default FID (27370737) as fallback
 
         Returns:
-            tuple: (fid, source) where source is 'test_fid', 'alliance_member', or 'default'
+            tuple: (fid, source) where source is 'alliance_member' or 'default'
         """
         try:
-            # First try: Use configured test FID if it's valid
-            test_fid = self.get_test_fid()
-            
-            # Check if test FID is actually configured (not default)
-            self.settings_cursor.execute("SELECT test_fid FROM test_fid_settings ORDER BY id DESC LIMIT 1")
-            result = self.settings_cursor.fetchone()
-            
-            if result and result[0] != "27370737":
-                # Test FID is configured, verify it's valid
-                is_valid, _ = await self.verify_test_fid(test_fid)
-                if is_valid:
-                    self.logger.info(f"Using configured test FID for validation: {test_fid}")
-                    return test_fid, 'test_fid'
-            
-            # Second try: Use a random alliance member
+            # First try: Use a random alliance member
             with sqlite3.connect('db/users.sqlite') as users_conn:
                 users_cursor = users_conn.cursor()
                 users_cursor.execute("""
@@ -801,7 +581,7 @@ class GiftOperations(commands.Cog):
                     self.logger.info(f"Using alliance member FID for validation: {fid} ({nickname})")
                     return fid, 'alliance_member'
             
-            # Third try: Fall back to default FID
+            # Fallback: Use default FID
             self.logger.info("No alliance members found, using default FID for validation: 27370737")
             return "27370737", 'default'
             
@@ -1031,146 +811,75 @@ class GiftOperations(commands.Cog):
         return session, response_stove_info
 
     async def attempt_gift_code_with_api(self, player_id, giftcode, session):
-        """Attempt to redeem a gift code."""
-        max_ocr_attempts = 4
+        """Attempt to redeem a gift code directly without captcha (Kingshot version)."""
+        self.logger.info(f"GiftOps: Attempting gift code redemption for FID {player_id} (no captcha required)")
         
-        for attempt in range(max_ocr_attempts):
-            self.logger.info(f"GiftOps: Attempt {attempt + 1}/{max_ocr_attempts} to fetch/solve captcha for FID {player_id}")
-            
-            # Fetch captcha
-            captcha_image_base64, error = await self.fetch_captcha(player_id, session)
-            
-            if error:
-                if error == "CAPTCHA_TOO_FREQUENT":
-                    self.logger.info(f"GiftOps: API returned CAPTCHA_TOO_FREQUENT for FID {player_id}")
-                    return "CAPTCHA_TOO_FREQUENT", None, None, None
-                else:
-                    self.logger.error(f"GiftOps: Captcha fetch error for FID {player_id}: {error}")
-                    return "CAPTCHA_FETCH_ERROR", None, None, None
-            
-            if not captcha_image_base64:
-                self.logger.warning(f"GiftOps: No captcha image returned for FID {player_id}")
-                return "CAPTCHA_FETCH_ERROR", None, None, None
-            
-            # Decode captcha image
-            try:
-                if captcha_image_base64.startswith("data:image"):
-                    img_b64_data = captcha_image_base64.split(",", 1)[1]
-                else:
-                    img_b64_data = captcha_image_base64
-                image_bytes = base64.b64decode(img_b64_data)
-            except Exception as decode_err:
-                self.logger.error(f"Failed to decode base64 image for FID {player_id}: {decode_err}")
-                return "CAPTCHA_FETCH_ERROR", None, None, None
-            
-            # Solve captcha
-            self.processing_stats["ocr_solver_calls"] += 1
-            captcha_code, success, method, confidence, _ = await self.captcha_solver.solve_captcha(
-                image_bytes, fid=player_id, attempt=attempt)
-            
-            if not success:
-                self.logger.info(f"GiftOps: OCR failed for FID {player_id} on attempt {attempt + 1}")
-                if attempt == max_ocr_attempts - 1:
-                    return "MAX_CAPTCHA_ATTEMPTS_REACHED", None, None, None
-                continue
-            
-            self.processing_stats["ocr_valid_format"] += 1
-            self.logger.info(f"GiftOps: OCR solved for {player_id}: {captcha_code} (method:{method}, conf:{confidence:.2f}, attempt:{attempt+1})")
-            
-            # Submit gift code with solved captcha
-            data_to_encode = {
-                "fid": f"{player_id}",
-                "cdk": giftcode,
-                "captcha_code": captcha_code,
-                "time": f"{int(datetime.now().timestamp()*1000)}"
-            }
-            data = self.encode_data(data_to_encode)
-            self.processing_stats["captcha_submissions"] += 1
-            
-            # Submit to gift code API
-            response_giftcode = session.post(self.wos_giftcode_url, data=data)
-            
-            # Log the redemption attempt
-            log_entry_redeem = f"\n{datetime.now()} API REQ - Gift Code Redeem\nFID:{player_id}, Code:{giftcode}, Captcha:{captcha_code}\n"
-            try:
-                response_json_redeem = response_giftcode.json()
-                log_entry_redeem += f"Resp Code: {response_giftcode.status_code}\nResponse JSON:\n{json.dumps(response_json_redeem, indent=2)}\n"
-            except json.JSONDecodeError:
-                response_json_redeem = {}
-                log_entry_redeem += f"Resp Code: {response_giftcode.status_code}\nResponse Text (Not JSON): {response_giftcode.text[:500]}...\n"
-            log_entry_redeem += "-" * 50 + "\n"
-            self.giftlog.info(log_entry_redeem.strip())
-            
-            # Parse response
-            msg = response_json_redeem.get("msg", "Unknown Error").strip('.')
-            err_code = response_json_redeem.get("err_code")
-            
-            # Consolidate all captcha errors
-            captcha_errors = {
-                ("CAPTCHA CHECK ERROR", 40103),
-                ("CAPTCHA GET TOO FREQUENT", 40100),
-                ("CAPTCHA CHECK TOO FREQUENT", 40101),
-                ("CAPTCHA EXPIRED", 40102)
-            }
-            
-            is_captcha_error = (msg, err_code) in captcha_errors
-            
-            if is_captcha_error:
-                self.processing_stats["server_validation_failure"] += 1
-                if attempt == max_ocr_attempts - 1:
-                    return "CAPTCHA_INVALID", image_bytes, captcha_code, method
-                else:
-                    self.logger.info(f"GiftOps: CAPTCHA_INVALID for FID {player_id} on attempt {attempt + 1} (msg: {msg}). Retrying...")
-                    await asyncio.sleep(random.uniform(1.5, 2.5))
-                    continue
-            else:
-                self.processing_stats["server_validation_success"] += 1
-            
-            # Determine final status
-            if msg == "SUCCESS":
-                status = "SUCCESS"
-            elif msg == "RECEIVED" and err_code == 40008:
-                status = "RECEIVED"
-            elif msg == "SAME TYPE EXCHANGE" and err_code == 40011:
-                status = "SAME TYPE EXCHANGE"
-            elif msg == "TIME ERROR" and err_code == 40007:
-                status = "TIME_ERROR"
-            elif msg == "CDK NOT FOUND" and err_code == 40014:
-                status = "CDK_NOT_FOUND"
-            elif msg == "USED" and err_code == 40005:
-                status = "USAGE_LIMIT"
-            elif msg == "TIMEOUT RETRY" and err_code == 40004:
-                status = "TIMEOUT_RETRY"
-            elif msg == "NOT LOGIN":
-                status = "LOGIN_EXPIRED_MID_PROCESS"
-            elif "sign error" in msg.lower():
-                status = "SIGN_ERROR"
-                self.logger.error(f"[SIGN ERROR] Sign error detected for FID {player_id}, code {giftcode}")
-                self.logger.error(f"[SIGN ERROR] Response: {response_json_redeem}")
-            elif msg == "STOVE_LV ERROR" and err_code == 40006:
-                status = "TOO_SMALL_SPEND_MORE"
-                self.logger.error(f"[FURNACE LVL ERROR] Furnace level is too low for FID {player_id}, code {giftcode}")
-                self.logger.error(f"[FURNACE LVL ERROR] Response: {response_json_redeem}")
-            elif msg == "RECHARGE_MONEY ERROR" and err_code == 40017:
-                status = "TOO_POOR_SPEND_MORE"
-                self.logger.error(f"[VIP LEVEL ERROR] VIP level is too low for FID {player_id}, code {giftcode}")
-                self.logger.error(f"[VIP LEVEL ERROR] Response: {response_json_redeem}")
-            else:
-                status = "UNKNOWN_API_RESPONSE"
-                self.logger.info(f"Unknown API response for {player_id}: msg='{msg}', err_code={err_code}")
-            
-            return status, image_bytes, captcha_code, method
+        # Submit gift code directly without captcha
+        data_to_encode = {
+            "fid": f"{player_id}",
+            "cdk": giftcode,
+            "time": f"{int(datetime.now().timestamp()*1000)}"
+        }
+        data = self.encode_data(data_to_encode)
         
-        return "MAX_CAPTCHA_ATTEMPTS_REACHED", None, None, None
+        # Submit to gift code API
+        response_giftcode = session.post(self.wos_giftcode_url, data=data)
+        
+        # Log the redemption attempt
+        log_entry_redeem = f"\n{datetime.now()} API REQ - Gift Code Redeem\nFID:{player_id}, Code:{giftcode}\n"
+        try:
+            response_json_redeem = response_giftcode.json()
+            log_entry_redeem += f"Resp Code: {response_giftcode.status_code}\nResponse JSON:\n{json.dumps(response_json_redeem, indent=2)}\n"
+        except json.JSONDecodeError:
+            response_json_redeem = {}
+            log_entry_redeem += f"Resp Code: {response_giftcode.status_code}\nResponse Text (Not JSON): {response_giftcode.text[:500]}...\n"
+        log_entry_redeem += "-" * 50 + "\n"
+        self.giftlog.info(log_entry_redeem.strip())
+        
+        # Parse response
+        msg = response_json_redeem.get("msg", "Unknown Error").strip('.')
+        err_code = response_json_redeem.get("err_code")
+        
+        # Determine final status
+        if msg == "SUCCESS":
+            status = "SUCCESS"
+        elif msg == "RECEIVED" and err_code == 40008:
+            status = "RECEIVED"
+        elif msg == "SAME TYPE EXCHANGE" and err_code == 40011:
+            status = "SAME TYPE EXCHANGE"
+        elif msg == "TIME ERROR" and err_code == 40007:
+            status = "TIME_ERROR"
+        elif msg == "CDK NOT FOUND" and err_code == 40014:
+            status = "CDK_NOT_FOUND"
+        elif msg == "USED" and err_code == 40005:
+            status = "USAGE_LIMIT"
+        elif msg == "TIMEOUT RETRY" and err_code == 40004:
+            status = "TIMEOUT_RETRY"
+        elif msg == "NOT LOGIN":
+            status = "LOGIN_EXPIRED_MID_PROCESS"
+        elif "sign error" in msg.lower():
+            status = "SIGN_ERROR"
+            self.logger.error(f"[SIGN ERROR] Sign error detected for FID {player_id}, code {giftcode}")
+            self.logger.error(f"[SIGN ERROR] Response: {response_json_redeem}")
+        elif msg == "STOVE_LV ERROR" and err_code == 40006:
+            status = "TOO_SMALL_SPEND_MORE"
+            self.logger.error(f"[FURNACE LVL ERROR] Furnace level is too low for FID {player_id}, code {giftcode}")
+            self.logger.error(f"[FURNACE LVL ERROR] Response: {response_json_redeem}")
+        elif msg == "RECHARGE_MONEY ERROR" and err_code == 40017:
+            status = "TOO_POOR_SPEND_MORE"
+            self.logger.error(f"[VIP LEVEL ERROR] VIP level is too low for FID {player_id}, code {giftcode}")
+            self.logger.error(f"[VIP LEVEL ERROR] Response: {response_json_redeem}")
+        else:
+            status = "UNKNOWN_API_RESPONSE"
+            self.logger.info(f"Unknown API response for {player_id}: msg='{msg}', err_code={err_code}")
+        
+        return status, None, None, None
 
     async def claim_giftcode_rewards_wos(self, player_id, giftcode):
 
         giftcode = self.clean_gift_code(giftcode)
         process_start_time = time.time()
         status = "ERROR"
-        image_bytes = None
-        captcha_code = None
-        method = "N/A"
 
         try:
             # Cache Check
@@ -1183,21 +892,6 @@ class GiftOperations(commands.Cog):
                         self.logger.info(f"CACHE HIT - User {player_id} code '{giftcode}' status: {existing_record[0]}")
                         return existing_record[0]
 
-            # Check if OCR Enabled and Solver Ready
-            self.settings_cursor.execute("SELECT enabled FROM ocr_settings ORDER BY id DESC LIMIT 1")
-            ocr_settings_row = self.settings_cursor.fetchone()
-            ocr_enabled = ocr_settings_row[0] if ocr_settings_row else 0
-
-            if not (ocr_enabled == 1 and self.captcha_solver):
-                status = "OCR_DISABLED" if ocr_enabled == 0 else "SOLVER_ERROR"
-                log_msg = f"{datetime.now()} Skipping captcha: OCR disabled (Enabled={ocr_enabled}) or Solver not ready ({self.captcha_solver is None}) for FID {player_id}.\n"
-                self.logger.info(log_msg.strip())
-                return status
-
-            # Initialize captcha solver stats
-            self.logger.info(f"GiftOps: OCR enabled and solver initialized for FID {player_id}.")
-            self.captcha_solver.reset_run_stats()
-            
             # Get player session
             session, response_stove_info = self.get_stove_info_wos(player_id=player_id)
             log_entry_player = f"\n{datetime.now()} API REQUEST - Player Info\nPlayer ID: {player_id}\n"
@@ -1224,7 +918,7 @@ class GiftOperations(commands.Cog):
             # Try gift code redemption
             self.logger.info(f"GiftOps: Starting gift code redemption for FID {player_id}")
             
-            status, image_bytes, captcha_code, method = await self.attempt_gift_code_with_api(
+            status, _, _, _ = await self.attempt_gift_code_with_api(
                 player_id, giftcode, session
             )
 
@@ -1277,47 +971,6 @@ class GiftOperations(commands.Cog):
             self.processing_stats["total_fids_processed"] += 1
             self.processing_stats["total_processing_time"] += duration
             self.logger.info(f"GiftOps: claim_giftcode_rewards_wos completed for FID {player_id}. Status: {status}, Duration: {duration:.3f}s")
-
-        # Image save handling
-        if image_bytes and self.captcha_solver and self.captcha_solver.save_images_mode > 0:
-            save_mode = self.captcha_solver.save_images_mode
-            should_save = False
-            filename_base = None
-            log_prefix = ""
-
-            is_success = status in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE"]
-            is_fail_server = status == "CAPTCHA_INVALID"
-
-            if is_success and save_mode in [2, 3]:
-                should_save = True
-                log_prefix = f"Captcha OK (Solver: {method})"
-                solved_code_str = captcha_code if captcha_code else "UNKNOWN_SOLVE"
-                filename_base = f"{solved_code_str}.png"
-            elif is_fail_server and save_mode in [1, 3]:
-                should_save = True
-                log_prefix = f"Captcha Fail Server (Solver: {method} -> {status})"
-                solved_code_str = captcha_code if captcha_code else "UNKNOWN_SENT"
-                timestamp = int(time.time())
-                filename_base = f"FAIL_SERVER_{solved_code_str}_{timestamp}.png"
-
-            if should_save and filename_base:
-                try:
-                    save_path = os.path.join(self.captcha_solver.captcha_dir, filename_base)
-                    counter = 1
-                    base, ext = os.path.splitext(filename_base)
-                    while os.path.exists(save_path) and counter <= 100:
-                        save_path = os.path.join(self.captcha_solver.captcha_dir, f"{base}_{counter}{ext}")
-                        counter += 1
-
-                    if counter > 100:
-                        self.logger.warning(f"Could not find unique filename for {filename_base} after 100 tries. Discarding image.")
-                    else:
-                        with open(save_path, "wb") as f:
-                            f.write(image_bytes)
-                        self.logger.info(f"GiftOps: {log_prefix} - Saved captcha image as {os.path.basename(save_path)}")
-
-                except Exception as save_err:
-                    self.logger.exception(f"GiftOps: Error saving captcha image ({filename_base}): {save_err}")
 
         self.logger.info(f"GiftOps: Final status for FID {player_id} / Code '{giftcode}': {status}")
         return status
@@ -1702,12 +1355,6 @@ class GiftOperations(commands.Cog):
                         else:
                             self.logger.info(f"GiftOps: Code '{giftcode}' returned status '{status}' during periodic validation.")
                             
-                            # Extra delay for CAPTCHA_TOO_FREQUENT errors
-                            if status == "CAPTCHA_TOO_FREQUENT":
-                                self.logger.info(f"GiftOps: Encountered CAPTCHA_TOO_FREQUENT, waiting 60-90 seconds before next validation")
-                                await asyncio.sleep(random.uniform(60.0, 90.0))
-                                continue
-                        
                         # Wait between validations to avoid rate limiting
                         await asyncio.sleep(random.uniform(30.0, 60.0))
                         
@@ -1730,259 +1377,6 @@ class GiftOperations(commands.Cog):
         self.logger.info("GiftOps: Waiting for bot to be ready before starting periodic_validation_loop...")
         await self.bot.wait_until_ready()
         self.logger.info("GiftOps: Bot is ready, periodic_validation_loop will start.")
-
-    async def fetch_captcha(self, player_id, session=None):
-        """Fetch a captcha image for a player ID."""
-        if session is None:
-            session = requests.Session()
-            session.mount("https://", HTTPAdapter(max_retries=self.retry_config))
-            
-        headers = {
-            "accept": "application/json, text/plain, */*",
-            "content-type": "application/x-www-form-urlencoded",
-            "origin": self.wos_giftcode_redemption_url,
-        }
-        
-        data_to_encode = {
-            "fid": player_id,
-            "time": f"{int(datetime.now().timestamp() * 1000)}",
-            "init": "0"
-        }
-        data = self.encode_data(data_to_encode)
-        
-        try:
-            response = session.post(
-                self.wos_captcha_url,
-                headers=headers,
-                data=data,
-            )
-            
-            if response.status_code == 200:
-                captcha_data = response.json()
-                if captcha_data.get("code") == 1 and captcha_data.get("msg") == "CAPTCHA GET TOO FREQUENT.":
-                    return None, "CAPTCHA_TOO_FREQUENT"
-                    
-                if "data" in captcha_data and "img" in captcha_data["data"]:
-                    return captcha_data["data"]["img"], None
-            
-            return None, "CAPTCHA_FETCH_ERROR"
-        except Exception as e:
-            self.logger.exception(f"Error fetching captcha: {e}")
-            return None, f"CAPTCHA_EXCEPTION: {str(e)}"
-
-    async def show_ocr_settings(self, interaction: discord.Interaction):
-            """Show OCR settings menu."""
-            try:
-                self.settings_cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (interaction.user.id,))
-                admin_info = self.settings_cursor.fetchone()
-
-                if not admin_info or admin_info[0] != 1:
-                    error_msg = "❌ You don't have permission to access OCR settings."
-                    if interaction.response.is_done():
-                        await interaction.followup.send(error_msg, ephemeral=True)
-                    else:
-                        await interaction.response.send_message(error_msg, ephemeral=True)
-                    return
-
-                self.settings_cursor.execute("SELECT enabled, save_images FROM ocr_settings ORDER BY id DESC LIMIT 1")
-                ocr_settings = self.settings_cursor.fetchone()
-
-                if not ocr_settings:
-                    self.logger.warning("No OCR settings found in DB, inserting defaults.")
-                    self.settings_cursor.execute("INSERT INTO ocr_settings (enabled, save_images) VALUES (1, 0)")
-                    self.settings_conn.commit()
-                    ocr_settings = (1, 0)
-
-                enabled, save_images_setting = ocr_settings
-                current_test_fid = self.get_test_fid()
-
-                onnx_available = False
-                solver_status_msg = "N/A"
-                if self.captcha_solver:
-                    if self.captcha_solver.is_initialized:
-                        onnx_available = True
-                        solver_status_msg = "Initialized & Ready"
-                    elif hasattr(self.captcha_solver, 'is_initialized'):
-                        onnx_available = True
-                        solver_status_msg = "Initialization Failed (Check Logs)"
-                    else:
-                        solver_status_msg = "Error (Instance missing flags)"
-                else:
-                    try:
-                        import onnxruntime
-                        onnx_available = True
-                        solver_status_msg = "Disabled or Init Failed"
-                    except ImportError:
-                        onnx_available = False
-                        solver_status_msg = "onnxruntime library missing"
-
-                save_options_text = {
-                    0: "❌ None", 1: "⚠️ Failed Only", 2: "✅ Success Only", 3: "💾 All"
-                }
-                save_images_display = save_options_text.get(save_images_setting, f"Unknown ({save_images_setting})")
-
-                embed = discord.Embed(
-                    title="🔍 CAPTCHA Solver Settings (ONNX)",
-                    description=(
-                        f"Configure the automatic CAPTCHA solver for gift code redemption.\n\n"
-                        f"**Current Settings**\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"🤖 **OCR Enabled:** {'✅ Yes' if enabled == 1 else '❌ No'}\n"
-                        f"💾 **Save CAPTCHA Images:** {save_images_display}\n"
-                        f"🆔 **Test FID:** `{current_test_fid}`\n"
-                        f"📦 **ONNX Runtime:** {'✅ Found' if onnx_available else '❌ Missing'}\n"
-                        f"⚙️ **Solver Status:** `{solver_status_msg}`\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                    ),
-                    color=discord.Color.blue()
-                )
-
-                if not onnx_available:
-                    embed.add_field(
-                        name="⚠️ Missing Library",
-                        value=(
-                            "ONNX Runtime and required libraries are needed for CAPTCHA solving.\n"
-                            "The model files must be in the bot/models/ directory.\n"
-                            "Try installing dependencies:\n"
-                            "```pip install onnxruntime pillow numpy\n"
-                        ), inline=False
-                    )
-
-                stats_lines = []
-                stats_lines.append("**Captcha Solver (Raw Format):**")
-                ocr_calls = self.processing_stats['ocr_solver_calls']
-                ocr_valid = self.processing_stats['ocr_valid_format']
-                ocr_format_rate = (ocr_valid / ocr_calls * 100) if ocr_calls > 0 else 0
-                stats_lines.append(f"• Solver Calls: `{ocr_calls}`")
-                stats_lines.append(f"• Valid Format Returns: `{ocr_valid}` ({ocr_format_rate:.1f}%)")
-
-                stats_lines.append("\n**Redemption Process (Server Side):**")
-                submissions = self.processing_stats['captcha_submissions']
-                server_success = self.processing_stats['server_validation_success']
-                server_fail = self.processing_stats['server_validation_failure']
-                total_server_val = server_success + server_fail
-                server_pass_rate = (server_success / total_server_val * 100) if total_server_val > 0 else 0
-                stats_lines.append(f"• Captcha Submissions: `{submissions}`")
-                stats_lines.append(f"• Server Validation Success: `{server_success}`")
-                stats_lines.append(f"• Server Validation Failure: `{server_fail}`")
-                stats_lines.append(f"• Server Pass Rate: `{server_pass_rate:.1f}%`")
-
-                total_fids = self.processing_stats['total_fids_processed']
-                total_time = self.processing_stats['total_processing_time']
-                avg_time = (total_time / total_fids if total_fids > 0 else 0)
-                stats_lines.append(f"• Avg. FID Processing Time: `{avg_time:.2f}s` (over `{total_fids}` FIDs)")
-
-                embed.add_field(
-                    name="📊 Processing Statistics (Since Bot Start)",
-                    value="\n".join(stats_lines),
-                    inline=False
-                )
-
-                embed.add_field(
-                    name="⚠️ Important Note",
-                    value="Saving images (especially 'All') can consume significant disk space over time.",
-                    inline=False
-                )
-
-                view = OCRSettingsView(self, ocr_settings, onnx_available)
-
-                if interaction.response.is_done():
-                    try:
-                        await interaction.edit_original_response(embed=embed, view=view)
-                    except discord.NotFound:
-                        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-                    except Exception as e_edit:
-                        self.logger.exception(f"Error editing original response in show_ocr_settings: {e_edit}")
-                        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-                else:
-                    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
-            except sqlite3.Error as db_err:
-                self.logger.exception(f"Database error in show_ocr_settings: {db_err}")
-                error_message = "❌ A database error occurred while loading OCR settings."
-                if interaction.response.is_done(): await interaction.followup.send(error_message, ephemeral=True)
-                else: await interaction.response.send_message(error_message, ephemeral=True)
-            except Exception as e:
-                self.logger.exception(f"Error showing OCR settings: {e}")
-                traceback.print_exc()
-                error_message = "❌ An unexpected error occurred while loading OCR settings."
-                if interaction.response.is_done():
-                    await interaction.followup.send(error_message, ephemeral=True)
-                else:
-                    await interaction.response.send_message(error_message, ephemeral=True)
-
-    async def update_ocr_settings(self, interaction, enabled=None, save_images=None):
-        """Update OCR settings in the database and reinitialize the solver if needed."""
-        try:
-            self.settings_cursor.execute("SELECT enabled, save_images FROM ocr_settings ORDER BY id DESC LIMIT 1")
-            current_settings = self.settings_cursor.fetchone()
-            if not current_settings:
-                current_settings = (1, 0)
-
-            current_enabled, current_save_images = current_settings
-
-            target_enabled = enabled if enabled is not None else current_enabled
-            target_save_images = save_images if save_images is not None else current_save_images
-
-            self.settings_cursor.execute("""
-                UPDATE ocr_settings SET enabled = ?, save_images = ?
-                WHERE id = (SELECT MAX(id) FROM ocr_settings)
-                """, (target_enabled, target_save_images))
-            if self.settings_cursor.rowcount == 0:
-                self.settings_cursor.execute("""
-                    INSERT INTO ocr_settings (enabled, save_images) VALUES (?, ?)
-                    """, (target_enabled, target_save_images))
-            self.settings_conn.commit()
-            self.logger.info(f"GiftOps: Updated OCR settings in DB -> Enabled={target_enabled}, SaveImages={target_save_images}")
-
-            message_suffix = "Settings updated."
-            reinitialize_solver = False
-
-            if enabled is not None and enabled != current_enabled:
-                reinitialize_solver = True
-                message_suffix = f"Solver has been {'enabled' if target_enabled == 1 else 'disabled'}."
-            
-            if save_images is not None and self.captcha_solver and self.captcha_solver.is_initialized:
-                self.captcha_solver.save_images_mode = target_save_images
-                self.logger.info(f"GiftOps: Updated live captcha_solver.save_images_mode to {target_save_images}")
-                if not reinitialize_solver:
-                    message_suffix = "Image saving preference updated."
-
-            if reinitialize_solver:
-                self.captcha_solver = None
-                if target_enabled == 1:
-                    self.logger.info("GiftOps: OCR is being enabled/reinitialized...")
-                    try:
-                        self.captcha_solver = GiftCaptchaSolver(save_images=target_save_images)
-                        if self.captcha_solver.is_initialized:
-                            self.logger.info("GiftOps: ONNX solver reinitialized successfully.")
-                            message_suffix += " Solver reinitialized."
-                        else:
-                            self.logger.error("GiftOps: ONNX solver FAILED to reinitialize.")
-                            message_suffix += " Solver reinitialization failed."
-                            self.captcha_solver = None
-                            return False, f"CAPTCHA solver settings updated. {message_suffix}"
-                    except ImportError as imp_err:
-                        self.logger.exception(f"GiftOps: ERROR - Reinitialization failed: Missing library {imp_err}")
-                        message_suffix += f" Solver initialization failed (Missing Library: {imp_err})."
-                        self.captcha_solver = None
-                        return False, f"CAPTCHA solver settings updated. {message_suffix}"
-                    except Exception as e:
-                        self.logger.exception(f"GiftOps: ERROR - Reinitialization failed: {e}")
-                        message_suffix += f" Solver initialization failed ({e})."
-                        self.captcha_solver = None
-                        return False, f"CAPTCHA solver settings updated. {message_suffix}"
-                else:
-                    self.logger.info("GiftOps: OCR disabled, solver instance removed/kept None.")
-
-            return True, f"CAPTCHA solver settings: {message_suffix}"
-
-        except sqlite3.Error as db_err:
-            self.logger.exception(f"Database error updating OCR settings: {db_err}")
-            return False, f"Database error updating OCR settings: {db_err}"
-        except Exception as e:
-            self.logger.exception(f"Unexpected error updating OCR settings: {e}")
-            return False, f"Unexpected error updating OCR settings: {e}"
 
     async def validate_gift_codes(self):
         try:
@@ -2924,8 +2318,8 @@ class GiftOperations(commands.Cog):
                 "└ Enable/disable auto-redemption of new valid gift codes\n\n"
                 "🔍 **Channel History Scan**\n"
                 "└ Trigger an on-demand scan of existing messages in a gift channel\n\n"
-                "⚙️ **CAPTCHA Settings**\n"
-                "└ Configure CAPTCHA-solver related settings and image saving\n"
+                "🗑️ **Clear Redemption Cache**\n"
+                "└ Clear the cached gift code redemption results\n"
                 "━━━━━━━━━━━━━━━━━━━━━━"
             ),
             color=discord.Color.blue()
@@ -3702,7 +3096,7 @@ class GiftOperations(commands.Cog):
     async def use_giftcode_for_alliance(self, alliance_id, giftcode):
         MEMBER_PROCESS_DELAY = 1.0
         API_RATE_LIMIT_COOLDOWN = 60.0
-        CAPTCHA_CYCLE_COOLDOWN = 60.0
+        RETRY_COOLDOWN = 60.0
         MAX_RETRY_CYCLES = 10
 
         self.logger.info(f"\nGiftOps: Starting use_giftcode_for_alliance for Alliance {alliance_id}, Code {giftcode}")
@@ -3726,26 +3120,6 @@ class GiftOperations(commands.Cog):
 
             if not channel:
                 self.logger.error(f"GiftOps: Bot cannot access channel {channel_id} for alliance {alliance_name}.")
-                return False
-
-            # Check if OCR is enabled
-            self.settings_cursor.execute("SELECT enabled FROM ocr_settings ORDER BY id DESC LIMIT 1")
-            ocr_settings_row = self.settings_cursor.fetchone()
-            ocr_enabled = ocr_settings_row[0] if ocr_settings_row else 0
-            
-            if not (ocr_enabled == 1 and self.captcha_solver):
-                error_embed = discord.Embed(
-                    title="❌ OCR/Captcha Solver Disabled",
-                    description=(
-                        f"**Gift Code:** `{giftcode}`\n"
-                        f"**Alliance:** `{alliance_name}`\n\n"
-                        f"⚠️ Gift code redemption requires the OCR/captcha solver to be enabled.\n"
-                        f"Please enable it first using the settings command."
-                    ),
-                    color=discord.Color.red()
-                )
-                await channel.send(embed=error_embed)
-                self.logger.info(f"GiftOps: Skipping alliance {alliance_id} - OCR disabled or solver not ready")
                 return False
 
             # Check if this code has been validated before
@@ -3864,9 +3238,6 @@ class GiftOperations(commands.Cog):
                             "TIMEOUT_RETRY": "⏱️ **{count}** members were staring into the void, until the void finally timed out on them.",
                             "LOGIN_EXPIRED_MID_PROCESS": "🔒 **{count}** members login failed mid-process. How'd that even happen?",
                             "LOGIN_FAILED": "🔐 **{count}** members failed due to login issues. Try logging it off and on again!",
-                            "CAPTCHA_SOLVING_FAILED": "🤖 **{count}** members lost the battle against CAPTCHA. You sure those weren't just bots?",
-                            "CAPTCHA_SOLVER_ERROR": "🔧 **{count}** members failed due to a CAPTCHA solver issue. We're still trying to solve that one.",
-                            "OCR_DISABLED": "🚫 **{count}** members failed since OCR is disabled. Try turning it on first!",
                             "SIGN_ERROR": "🔐 **{count}** members failed due to a signature error. Something went wrong.",
                             "ERROR": "❌ **{count}** members failed due to a general error. Might want to check the logs.",
                             "UNKNOWN_API_RESPONSE": "❓ **{count}** members failed with an unknown API response. Say what?"
@@ -4016,16 +3387,6 @@ class GiftOperations(commands.Cog):
                     already_used_users.append(nickname)
                     batch_results.append((fid, giftcode, response_status))
                     mark_processed = True
-                elif response_status == "OCR_DISABLED":
-                    add_to_failed = True
-                    mark_processed = True
-                    fail_reason = "OCR Disabled"
-                    error_summary["OCR_DISABLED"] = error_summary.get("OCR_DISABLED", 0) + 1
-                elif response_status in ["SOLVER_ERROR", "CAPTCHA_FETCH_ERROR"]:
-                    add_to_failed = True
-                    mark_processed = True
-                    fail_reason = f"Solver Error ({response_status})"
-                    error_summary["CAPTCHA_SOLVER_ERROR"] = error_summary.get("CAPTCHA_SOLVER_ERROR", 0) + 1
                 elif response_status in ["LOGIN_FAILED", "LOGIN_EXPIRED_MID_PROCESS", "ERROR", "UNKNOWN_API_RESPONSE"]:
                     add_to_failed = True
                     mark_processed = True
@@ -4047,22 +3408,6 @@ class GiftOperations(commands.Cog):
                     mark_processed = True
                     fail_reason = "Furnace level too low"
                     error_summary["TOO_SMALL_SPEND_MORE"] = error_summary.get("TOO_SMALL_SPEND_MORE", 0) + 1
-                elif response_status in ["CAPTCHA_INVALID", "MAX_CAPTCHA_ATTEMPTS_REACHED", "OCR_FAILED_ATTEMPT"]:
-                    if current_cycle_count + 1 < MAX_RETRY_CYCLES:
-                        queue_for_retry = True
-                        retry_delay = CAPTCHA_CYCLE_COOLDOWN
-                        fail_reason = "Captcha Cycle Failed"
-                        self.logger.info(f"GiftOps: FID {fid} failed captcha cycle {current_cycle_count + 1}. Queuing for retry cycle {current_cycle_count + 2} in {retry_delay}s.")
-                    else:
-                        add_to_failed = True
-                        mark_processed = True
-                        fail_reason = f"Failed after {MAX_RETRY_CYCLES} captcha cycles (Last Status: {response_status})"
-                        self.logger.info(f"GiftOps: Max ({MAX_RETRY_CYCLES}) retry cycles reached for FID {fid}. Marking as failed.")
-                        # Track based on error type
-                        if response_status in ["CAPTCHA_INVALID", "MAX_CAPTCHA_ATTEMPTS_REACHED"]:
-                            error_summary["CAPTCHA_SOLVING_FAILED"] = error_summary.get("CAPTCHA_SOLVING_FAILED", 0) + 1
-                        else:  # OCR_FAILED_ATTEMPT
-                            error_summary["CAPTCHA_SOLVER_ERROR"] = error_summary.get("CAPTCHA_SOLVER_ERROR", 0) + 1
                 else:
                     add_to_failed = True
                     mark_processed = True
@@ -4074,12 +3419,12 @@ class GiftOperations(commands.Cog):
                     processed_count += 1
                     if add_to_failed:
                         failed_count += 1
-                        cycle_failed_on = current_cycle_count + 1 if response_status not in ["CAPTCHA_INVALID", "MAX_CAPTCHA_ATTEMPTS_REACHED", "OCR_FAILED_ATTEMPT"] or (current_cycle_count + 1 >= MAX_RETRY_CYCLES) else MAX_RETRY_CYCLES
+                        cycle_failed_on = current_cycle_count + 1 if (current_cycle_count + 1 >= MAX_RETRY_CYCLES) else MAX_RETRY_CYCLES
                         failed_users_dict[fid] = (nickname, fail_reason, cycle_failed_on)
                 
                 if queue_for_retry:
                     retry_after_ts = time.time() + retry_delay
-                    cycle_for_next_retry = current_cycle_count + 1 if response_status in ["CAPTCHA_INVALID", "MAX_CAPTCHA_ATTEMPTS_REACHED", "OCR_FAILED_ATTEMPT"] else current_cycle_count
+                    cycle_for_next_retry = current_cycle_count
                     retry_queue.append((fid, nickname, cycle_for_next_retry, retry_after_ts))
                 
                 # Batch process results when reaching batch size
@@ -4325,81 +3670,6 @@ class DeleteGiftCodeModal(discord.ui.Modal, title="Delete Gift Code"):
         )
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
-
-class TestFIDModal(discord.ui.Modal, title="Change Test FID"):
-    def __init__(self, cog):
-        super().__init__()
-        self.cog = cog
-        
-        try:
-            self.cog.settings_cursor.execute("SELECT test_fid FROM test_fid_settings ORDER BY id DESC LIMIT 1")
-            result = self.cog.settings_cursor.fetchone()
-            current_fid = result[0] if result else "27370737"
-        except Exception:
-            current_fid = "27370737"
-        
-        self.test_fid = discord.ui.TextInput(
-            label="Enter New Player ID (FID)",
-            placeholder="Example: 27370737",
-            default=current_fid,
-            required=True,
-            min_length=1,
-            max_length=20
-        )
-        self.add_item(self.test_fid)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            # Defer the response since we'll make an API call to validate
-            await interaction.response.defer(ephemeral=True)
-            
-            new_fid = self.test_fid.value.strip()
-            
-            if not new_fid.isdigit():
-                await interaction.followup.send("❌ Invalid FID format. Please enter a numeric FID.", ephemeral=True)
-                return
-            
-            is_valid, message = await self.cog.verify_test_fid(new_fid)
-            
-            if is_valid:
-                success = await self.cog.update_test_fid(new_fid)
-                
-                if success:
-                    embed = discord.Embed(
-                        title="✅ Test FID Updated",
-                        description=(
-                            f"**Test FID Configuration**\n"
-                            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                            f"🆔 **FID:** `{new_fid}`\n"
-                            f"✅ **Status:** Validated\n"
-                            f"📝 **Action:** Updated in database\n"
-                            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                        ),
-                        color=discord.Color.green()
-                    )
-                    await interaction.followup.send(embed=embed, ephemeral=True)
-                    
-                    await self.cog.show_ocr_settings(interaction)
-                else:
-                    await interaction.followup.send("❌ Failed to update test FID in database. Check logs for details.", ephemeral=True)
-            else:
-                embed = discord.Embed(
-                    title="❌ Invalid Test FID",
-                    description=(
-                        f"**Test FID Validation**\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"🆔 **FID:** `{new_fid}`\n"
-                        f"❌ **Status:** Invalid FID\n"
-                        f"📝 **Reason:** {message}\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                    ),
-                    color=discord.Color.red()
-                )
-                await interaction.followup.send(embed=embed, ephemeral=True)
-                
-        except Exception as e:
-            self.cog.logger.exception(f"Error updating test FID: {e}")
-            await interaction.followup.send(f"❌ An error occurred: {str(e)}", ephemeral=True)
 
 class GiftView(discord.ui.View):
     def __init__(self, cog):
@@ -4784,14 +4054,51 @@ class SettingsMenuView(discord.ui.View):
         await self.cog.channel_history_scan(interaction)
     
     @discord.ui.button(
-        label="CAPTCHA Settings",
+        label="Clear Redemption Cache",
         style=discord.ButtonStyle.secondary,
-        custom_id="captcha_settings",
-        emoji="⚙️",
+        custom_id="clear_cache",
+        emoji="🗑️",
         row=1
     )
-    async def captcha_settings_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.show_ocr_settings(interaction)
+    async def clear_cache_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Handle the clear redemption cache button click."""
+        try:
+            self.cog.cursor.execute("SELECT COUNT(*) FROM user_giftcodes")
+            record_count = self.cog.cursor.fetchone()[0]
+        except Exception as e:
+            self.cog.logger.exception(f"Error counting redemption cache records: {e}")
+            record_count = "Unknown"
+
+        # Create confirmation embed
+        embed = discord.Embed(
+            title="⚠️ Clear Redemption Cache",
+            description=(
+                "This will **permanently delete** all gift code redemption records from the database.\n\n"
+                "**What this does:**\n"
+                "• Removes all entries from the `user_giftcodes` table\n"
+                "• Allows users to attempt redeeming gift codes again\n"
+                "• Useful for testing or if you want to reset redemption history\n\n"
+                "⚠️ **Warning:** This action cannot be undone!"
+            ),
+            color=discord.Color.orange()
+        )
+
+        if isinstance(record_count, int):
+            embed.add_field(
+                name="📊 Current Cache Size",
+                value=f"{record_count:,} redemption records",
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="📊 Current Cache Size", 
+                value="Unable to count records",
+                inline=False
+            )
+
+        # Create confirmation view
+        confirm_view = ClearCacheConfirmView(self.cog)
+        await interaction.response.send_message(embed=embed, view=confirm_view, ephemeral=True)
     
     @discord.ui.button(
         label="⬅️ Back",
@@ -4858,375 +4165,5 @@ class ClearCacheConfirmView(discord.ui.View):
         except:
             pass
 
-class OCRSettingsView(discord.ui.View):
-    def __init__(self, cog, ocr_settings, onnx_available):
-        super().__init__(timeout=7200)
-        self.cog = cog
-        self.enabled = ocr_settings[0]
-        self.save_images_setting = ocr_settings[1]
-        self.onnx_available = onnx_available
-        self.disable_controls = not onnx_available
-
-        # Row 0: Enable/Disable Button, Test Button
-        self.enable_ocr_button_item = discord.ui.Button(
-            emoji="✅" if self.enabled == 1 else "🚫",
-            custom_id="enable_ocr", row=0,
-            label="Disable CAPTCHA Solver" if self.enabled == 1 else "Enable CAPTCHA Solver",
-            style=discord.ButtonStyle.danger if self.enabled == 1 else discord.ButtonStyle.success,
-            disabled=self.disable_controls
-        )
-        self.enable_ocr_button_item.callback = self.enable_ocr_button
-        self.add_item(self.enable_ocr_button_item)
-
-        self.test_ocr_button_item = discord.ui.Button(
-            label="Test CAPTCHA Solver", style=discord.ButtonStyle.secondary, emoji="🧪",
-            custom_id="test_ocr", row=0,
-            disabled=self.disable_controls
-        )
-        self.test_ocr_button_item.callback = self.test_ocr_button
-        self.add_item(self.test_ocr_button_item)
-
-        # Add the Change Test FID Button
-        self.change_test_fid_button_item = discord.ui.Button(
-            label="Change Test FID", style=discord.ButtonStyle.primary, emoji="🔄",
-            custom_id="change_test_fid", row=0,
-            disabled=self.disable_controls
-        )
-        self.change_test_fid_button_item.callback = self.change_test_fid_button
-        self.add_item(self.change_test_fid_button_item)
-
-        # Add the Clear Redemption Cache Button
-        self.clear_cache_button_item = discord.ui.Button(
-            label="Clear Redemption Cache", style=discord.ButtonStyle.danger, emoji="🗑️",
-            custom_id="clear_redemption_cache", row=1,
-            disabled=self.disable_controls
-        )
-        self.clear_cache_button_item.callback = self.clear_redemption_cache_button
-        self.add_item(self.clear_cache_button_item)
-
-        # Row 2: Image Save Select Menu
-        self.image_save_select_item = discord.ui.Select(
-            placeholder="Select Captcha Image Saving Option",
-            min_values=1, max_values=1, row=2, custom_id="image_save_select",
-            options=[
-                discord.SelectOption(label="Don't Save Any Images", value="0", description="Fastest, no disk usage"),
-                discord.SelectOption(label="Save Only Failed Captchas", value="1", description="For debugging server rejects"),
-                discord.SelectOption(label="Save Only Successful Captchas", value="2", description="To see what worked"),
-                discord.SelectOption(label="Save All Captchas (High Disk Usage!)", value="3", description="Comprehensive debugging")
-            ],
-            disabled=self.disable_controls
-        )
-        for option in self.image_save_select_item.options:
-            option.default = (str(self.save_images_setting) == option.value)
-        self.image_save_select_item.callback = self.image_save_select_callback
-        self.add_item(self.image_save_select_item)
-
-    async def change_test_fid_button(self, interaction: discord.Interaction):
-        """Handle the change test FID button click."""
-        if not self.onnx_available:
-            await interaction.response.send_message("❌ Required library (onnxruntime) is not installed or failed to load.", ephemeral=True)
-            return
-        await interaction.response.send_modal(TestFIDModal(self.cog))
-
-    async def enable_ocr_button(self, interaction: discord.Interaction):
-        if not self.onnx_available:
-            await interaction.response.send_message("❌ Required library (onnxruntime) is not installed or failed to load.", ephemeral=True)
-            return
-        
-        await interaction.response.defer(ephemeral=True)
-        new_enabled = 1 if self.enabled == 0 else 0
-        success, message = await self.cog.update_ocr_settings(interaction, enabled=new_enabled)
-        await self.cog.show_ocr_settings(interaction)
-
-    async def test_ocr_button(self, interaction: discord.Interaction):
-        logger = self.cog.logger
-        user_id = interaction.user.id
-        current_time = time.time()
-
-        if not self.onnx_available:
-            await interaction.response.send_message("❌ Required library (onnxruntime) is not installed or failed to load.", ephemeral=True)
-            return
-        if not self.cog.captcha_solver or not self.cog.captcha_solver.is_initialized:
-            await interaction.response.send_message("❌ CAPTCHA solver is not initialized. Ensure OCR is enabled.", ephemeral=True)
-            return
-
-        last_test_time = self.cog.test_captcha_cooldowns.get(user_id, 0)
-        if current_time - last_test_time < self.cog.test_captcha_delay:
-            remaining_time = int(self.cog.test_captcha_delay - (current_time - last_test_time))
-            await interaction.response.send_message(f"❌ Please wait {remaining_time} more seconds before testing again.", ephemeral=True)
-            return
-
-        await interaction.response.defer(ephemeral=True)
-        logger.info(f"[Test Button] User {user_id} triggered test.")
-        self.cog.test_captcha_cooldowns[user_id] = current_time
-
-        captcha_image_base64 = None
-        image_bytes = None
-        error = None
-        captcha_code = None
-        success = False
-        method = "N/A"
-        confidence = 0.0
-        solve_duration = 0.0
-        test_fid = self.cog.get_test_fid()
-
-        try:
-            logger.info(f"[Test Button] First logging in with test FID {test_fid}...")
-            session, response_stove_info = self.cog.get_stove_info_wos(player_id=test_fid)
-            
-            try:
-                player_info_json = response_stove_info.json()
-                if player_info_json.get("msg") != "success":
-                    logger.error(f"[Test Button] Login failed for test FID {test_fid}: {player_info_json.get('msg')}")
-                    await interaction.followup.send(f"❌ Login failed with test FID {test_fid}. Please check if the FID is valid.", ephemeral=True)
-                    return
-                logger.info(f"[Test Button] Successfully logged in with test FID {test_fid}")
-            except Exception as json_err:
-                logger.error(f"[Test Button] Error parsing login response: {json_err}")
-                await interaction.followup.send("❌ Error processing login response.", ephemeral=True)
-                return
-            
-            logger.info(f"[Test Button] Fetching captcha for test FID {test_fid} using established session...")
-            captcha_image_base64, error = await self.cog.fetch_captcha(test_fid, session=session)
-            logger.info(f"[Test Button] Captcha fetch result: Error='{error}', HasImage={captcha_image_base64 is not None}")
-
-            if error:
-                await interaction.followup.send(f"❌ Error fetching test captcha from the API: `{error}`", ephemeral=True)
-                return
-
-            if captcha_image_base64:
-                try:
-                    if captcha_image_base64.startswith("data:image"):
-                        img_b64_data = captcha_image_base64.split(",", 1)[1]
-                    else:
-                        img_b64_data = captcha_image_base64
-                    image_bytes = base64.b64decode(img_b64_data)
-                    logger.info("[Test Button] Successfully decoded base64 image.")
-                except Exception as decode_err:
-                    logger.error(f"[Test Button] Failed to decode base64 image: {decode_err}")
-                    await interaction.followup.send("❌ Failed to decode captcha image data.", ephemeral=True)
-                    return
-            else:
-                logger.error("[Test Button] Captcha fetch returned no image data.")
-                await interaction.followup.send("❌ Failed to retrieve captcha image data from API.", ephemeral=True)
-                return
-
-            if image_bytes:
-                logger.info("[Test Button] Solving fetched captcha...")
-                start_solve_time = time.time()
-                captcha_code, success, method, confidence, _ = await self.cog.captcha_solver.solve_captcha(
-                    image_bytes, fid=f"test-{user_id}", attempt=0
-                )
-                solve_duration = time.time() - start_solve_time
-                log_confidence_str = f'{confidence:.2f}' if isinstance(confidence, float) else 'N/A'
-                logger.info(f"[Test Button] Solve result: Success={success}, Code='{captcha_code}', Method='{method}', Conf={log_confidence_str}. Duration: {solve_duration:.2f}s")
-            else:
-                 logger.error("[Test Button] Logic error: image_bytes is None before solving.")
-                 await interaction.followup.send("❌ Internal error before solving captcha.", ephemeral=True)
-                 return
-
-            confidence_str = f'{confidence:.2f}' if isinstance(confidence, float) else 'N/A'
-            embed = discord.Embed(
-                title="🧪 CAPTCHA Solver Test Results (ONNX)",
-                description=(
-                    f"**Test Summary**\n━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"🤖 **OCR Success:** {'✅ Yes' if success else '❌ No'}\n"
-                    f"🔍 **Recognized Code:** `{captcha_code if success and captcha_code else 'N/A'}`\n"
-                    f"📊 **Confidence:** `{confidence_str}`\n"
-                    f"⏱️ **Solve Time:** `{solve_duration:.2f}s`\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                ), color=discord.Color.green() if success else discord.Color.red()
-            )
-
-            save_path_str = None
-            save_error_str = None
-            try:
-                self.cog.settings_cursor.execute("SELECT save_images FROM ocr_settings ORDER BY id DESC LIMIT 1")
-                save_setting_row = self.cog.settings_cursor.fetchone()
-                current_save_mode = save_setting_row[0] if save_setting_row else 0
-
-                should_save_img = False
-                save_tag = "UNKNOWN"
-                if success and current_save_mode in [2, 3]:
-                    should_save_img = True
-                    save_tag = captcha_code if captcha_code else "SUCCESS_NOCDE"
-                elif not success and current_save_mode in [1, 3]:
-                    should_save_img = True
-                    save_tag = "FAILED"
-
-                if should_save_img and image_bytes:
-                    logger.info(f"[Test Button] Attempting to save image based on mode {current_save_mode}. Status success={success}, tag='{save_tag}'")
-                    captcha_dir = self.cog.captcha_solver.captcha_dir
-                    safe_tag = re.sub(r'[\\/*?:"<>|]', '_', save_tag)
-                    timestamp = int(time.time())
-
-                    if success:
-                         base_filename = f"{safe_tag}.png"
-                    else:
-                         base_filename = f"FAIL_{safe_tag}_{timestamp}.png"
-
-                    test_path = os.path.join(captcha_dir, base_filename)
-
-                    counter = 1
-                    orig_path = test_path
-                    while os.path.exists(test_path) and counter <= 100:
-                        name, ext = os.path.splitext(orig_path)
-                        test_path = f"{name}_{counter}{ext}"
-                        counter += 1
-
-                    if counter > 100:
-                        save_error_str = f"Could not find unique filename for {base_filename} after 100 tries."
-                        logger.warning(f"[Test Button] {save_error_str}")
-                    else:
-                        os.makedirs(captcha_dir, exist_ok=True)
-                        with open(test_path, "wb") as f:
-                            f.write(image_bytes)
-                        save_path_str = os.path.basename(test_path)
-                        logger.info(f"[Test Button] Saved test captcha image to {test_path}")
-
-            except Exception as img_save_err:
-                logger.exception(f"[Test Button] Error saving test image: {img_save_err}")
-                save_error_str = f"Error during saving: {img_save_err}"
-
-            if save_path_str:
-                embed.add_field(name="📸 Captcha Image Saved", value=f"`{save_path_str}` in `{os.path.relpath(self.cog.captcha_solver.captcha_dir)}`", inline=False)
-            elif save_error_str:
-                embed.add_field(name="⚠️ Image Save Error", value=save_error_str, inline=False)
-
-            await interaction.followup.send(embed=embed, ephemeral=True)
-            logger.info(f"[Test Button] Test completed for user {user_id}.")
-
-        except Exception as e:
-            logger.exception(f"[Test Button] UNEXPECTED Error during test for user {user_id}: {e}")
-            try:
-                await interaction.followup.send(f"❌ An unexpected error occurred during the test: `{e}`. Please check the bot logs.", ephemeral=True)
-            except Exception as followup_err:
-                logger.error(f"[Test Button] Failed to send final error followup to user {user_id}: {followup_err}")
-
-    async def clear_redemption_cache_button(self, interaction: discord.Interaction):
-        """Handle the clear redemption cache button click."""
-        if not self.onnx_available:
-            await interaction.response.send_message("❌ Required library (onnxruntime) is not installed or failed to load.", ephemeral=True)
-            return
-
-        # Create confirmation embed
-        embed = discord.Embed(
-            title="⚠️ Clear Redemption Cache",
-            description=(
-                "This will **permanently delete** all gift code redemption records from the database.\n\n"
-                "**What this does:**\n"
-                "• Removes all entries from the `user_giftcodes` table\n"
-                "• Allows users to attempt redeeming gift codes again\n"
-                "• Useful for development testing and image collection\n\n"
-                "**Warning:** This action cannot be undone!"
-            ),
-            color=discord.Color.orange()
-        )
-
-        # Get current count for display
-        try:
-            self.cog.cursor.execute("SELECT COUNT(*) FROM user_giftcodes")
-            current_count = self.cog.cursor.fetchone()[0]
-            embed.add_field(
-                name="📊 Current Records",
-                value=f"{current_count:,} redemption records will be deleted",
-                inline=False
-            )
-        except Exception as e:
-            self.cog.logger.error(f"Error getting user_giftcodes count: {e}")
-            embed.add_field(
-                name="📊 Current Records", 
-                value="Unable to count records",
-                inline=False
-            )
-
-        # Create confirmation view
-        confirm_view = ClearCacheConfirmView(self.cog)
-        await interaction.response.send_message(embed=embed, view=confirm_view, ephemeral=True)
-
-    async def image_save_select_callback(self, interaction: discord.Interaction):
-        if not self.onnx_available:
-            await interaction.response.send_message("❌ Required library (onnxruntime) is not installed or failed to load.", ephemeral=True)
-            return
-
-        await interaction.response.defer(ephemeral=True) 
-        
-        try:
-            selected_value = int(interaction.data["values"][0])
-        
-            success, message = await self.cog.update_ocr_settings(
-                interaction=interaction,
-                save_images=selected_value
-            )
-
-            if success:
-                self.save_images_setting = selected_value
-                for option in self.image_save_select_item.options:
-                    option.default = (str(self.save_images_setting) == option.value)
-            else:
-                await interaction.followup.send(f"❌ {message}", ephemeral=True)
-
-        except ValueError:
-            await interaction.followup.send("❌ Invalid selection value for image saving.", ephemeral=True)
-        except Exception as e:
-            self.cog.logger.exception("Error processing image save selection in OCRSettingsView.")
-            await interaction.followup.send("❌ An error occurred while updating image saving settings.", ephemeral=True)
-        
-        async def update_task(save_images_value):
-            self.cog.logger.info(f"Task started: Updating OCR save_images to {save_images_value}")
-            _success, _message = await self.cog.update_ocr_settings(
-                interaction=None,
-                save_images=save_images_value
-            )
-            self.cog.logger.info(f"Task finished: update_ocr_settings returned success={_success}, message='{_message}'")
-            return _success, _message
-
-        update_job = asyncio.create_task(update_task(selected_value))
-        initial_followup_message = "⏳ Your settings are being updated... Please wait."
-        try:
-            progress_message = await interaction.followup.send(initial_followup_message, ephemeral=True)
-        except discord.HTTPException as e:
-            self.cog.logger.error(f"Failed to send initial followup for image save: {e}")
-            return
-
-        try:
-            success, message_from_task = await asyncio.wait_for(update_job, timeout=60.0)
-        except asyncio.TimeoutError:
-            self.cog.logger.error("Timeout waiting for OCR settings update task to complete.")
-            await progress_message.edit(content="⌛️ Timed out waiting for settings to update. Please try again or check logs.")
-            return
-        except Exception as e_task:
-            self.cog.logger.exception(f"Exception in OCR settings update task: {e_task}")
-            await progress_message.edit(content=f"❌ An error occurred during the update: {e_task}")
-            return
-
-        if success:
-            self.cog.logger.info(f"OCR settings update successful: {message_from_task}")
-            self.cog.settings_cursor.execute("SELECT enabled, save_images FROM ocr_settings ORDER BY id DESC LIMIT 1")
-            ocr_settings_new = self.cog.settings_cursor.fetchone()
-            if ocr_settings_new:
-                self.save_images_setting = ocr_settings_new[1]
-                for option in self.image_save_select_item.options:
-                    option.default = (str(self.save_images_setting) == option.value)
-            
-            try:
-                new_embed = interaction.message.embeds[0] if interaction.message.embeds else None
-
-                await interaction.edit_original_response(
-                    content=None,
-                    embed=new_embed, 
-                    view=self
-                )
-                await progress_message.edit(content=f"✅ {message_from_task}")
-            except discord.NotFound:
-                 self.cog.logger.warning("Original message or progress message for OCR settings not found for final update.")
-            except Exception as e_edit_final:
-                 self.cog.logger.exception(f"Error editing messages after successful OCR settings update: {e_edit_final}")
-                 await progress_message.edit(content=f"✅ {message_from_task}\n⚠️ Couldn't fully refresh the view.")
-
-        else:
-            self.cog.logger.error(f"OCR settings update failed: {message_from_task}")
-            await progress_message.edit(content=f"❌ {message_from_task}")
-
 async def setup(bot):
-    await bot.add_cog(GiftOperations(bot)) 
+    await bot.add_cog(GiftOperations(bot))

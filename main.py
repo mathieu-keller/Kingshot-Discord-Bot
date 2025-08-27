@@ -46,7 +46,6 @@ if __name__ == "__main__":
     from colorama import Fore, Style, init
     import requests
     import asyncio
-    import pkg_resources
     import shutil
     import zipfile
     from datetime import datetime
@@ -84,7 +83,7 @@ if __name__ == "__main__":
     UPDATE_SOURCES = [
         {
             "name": "GitHub",
-            "api_url": "https://api.github.com/repos/justncodes/Kingshot-Discord-Bot/releases/latest",
+            "api_url": "https://api.github.com/repos/kingshot-project/Kingshot-Discord-Bot/releases/latest",
             "primary": True
         }
     ]
@@ -358,8 +357,18 @@ if __name__ == "__main__":
 
     setup_version_table()
 
-    # Run update check
-    asyncio.run(check_and_update_files())
+    # Check for conflicting flags
+    if "--autoupdate" in sys.argv and "--no-update" in sys.argv:
+        print(Fore.RED + "Error: --autoupdate and --no-update flags are mutually exclusive." + Style.RESET_ALL)
+        print("Use --autoupdate to automatically install updates without prompting.")
+        print("Use --no-update to skip all update checks.")
+        sys.exit(1)
+    
+    # Run update check unless --no-update flag is present
+    if "--no-update" not in sys.argv:
+        asyncio.run(check_and_update_files())
+    else:
+        print(Fore.YELLOW + "Update check skipped due to --no-update flag." + Style.RESET_ALL)
             
     import discord
     from discord.ext import commands

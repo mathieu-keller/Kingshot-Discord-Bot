@@ -9,3 +9,4 @@ pyzipper>=0.3.0
 matplotlib>=3.10.0
 arabic-reshaper>=3.0.0
 python-bidi>=0.6.2
+certifi>=2025.4.26

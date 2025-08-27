@@ -48,8 +48,8 @@ class GNCommands(commands.Cog):
                         name="📌 Community & Support",
                         value=(
                             "**GitHub Repository:** [Kingshot Bot](https://github.com/justncodes/Kingshot-Discord-Bot)\n"
-                            "**Discord Community:** [Join our Discord](https://discord.gg/HFnNnQWnbS)\n"
-                            "**Bug Reports:** [GitHub Issues](https://github.com/justncodes/Kingshot-Discord-Bot/issues)\n"
+                            "**Discord Community:** [Join our Discord](https://discord.gg/apYByj6K2m)\n"
+                            "**Bug Reports:** [GitHub Issues](https://github.com/kingshot-project/Kingshot-Discord-Bot/issues)\n"
                             "━━━━━━━━━━━━━━━━━━━━━━"
                         ),
                         inline=False

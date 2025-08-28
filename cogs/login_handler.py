@@ -209,10 +209,6 @@ class LoginHandler:
                         
                         # Check if we have valid data
                         if data.get('data'):
-<<<<<<< HEAD
-=======
-                            # Add delay to respect rate limits (1 request per 2 seconds for Kingshot)
->>>>>>> 8c46f18 (Ensure 2s delay between checks to avoid rate limit.)
                             await asyncio.sleep(self.request_delay)
                             return {
                                 'status': 'success',
@@ -222,10 +218,6 @@ class LoginHandler:
                         
                         # Check if this is specifically error 40004 (role not exist)
                         elif data.get('err_code') == 40004:
-<<<<<<< HEAD
-=======
-                            # Add delay even for not found responses
->>>>>>> 8c46f18 (Ensure 2s delay between checks to avoid rate limit.)
                             await asyncio.sleep(self.request_delay)
                             return {
                                 'status': 'not_found',
@@ -238,10 +230,6 @@ class LoginHandler:
                         else:
                             err_code = data.get('err_code', 'unknown')
                             err_msg = data.get('msg', 'Unknown error')
-<<<<<<< HEAD
-=======
-                            # Add delay for all API responses
->>>>>>> 8c46f18 (Ensure 2s delay between checks to avoid rate limit.)
                             await asyncio.sleep(self.request_delay)
                             return {
                                 'status': 'error',

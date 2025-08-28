@@ -209,6 +209,11 @@ class LoginHandler:
                         
                         # Check if we have valid data
                         if data.get('data'):
+<<<<<<< HEAD
+=======
+                            # Add delay to respect rate limits (1 request per 2 seconds for Kingshot)
+>>>>>>> 8c46f18 (Ensure 2s delay between checks to avoid rate limit.)
+                            await asyncio.sleep(self.request_delay)
                             return {
                                 'status': 'success',
                                 'data': data['data'],
@@ -217,6 +222,11 @@ class LoginHandler:
                         
                         # Check if this is specifically error 40004 (role not exist)
                         elif data.get('err_code') == 40004:
+<<<<<<< HEAD
+=======
+                            # Add delay even for not found responses
+>>>>>>> 8c46f18 (Ensure 2s delay between checks to avoid rate limit.)
+                            await asyncio.sleep(self.request_delay)
                             return {
                                 'status': 'not_found',
                                 'data': None,
@@ -228,6 +238,11 @@ class LoginHandler:
                         else:
                             err_code = data.get('err_code', 'unknown')
                             err_msg = data.get('msg', 'Unknown error')
+<<<<<<< HEAD
+=======
+                            # Add delay for all API responses
+>>>>>>> 8c46f18 (Ensure 2s delay between checks to avoid rate limit.)
+                            await asyncio.sleep(self.request_delay)
                             return {
                                 'status': 'error',
                                 'data': None,
@@ -288,7 +303,7 @@ class LoginHandler:
             if progress_callback:
                 await progress_callback(i + 1, total, f"Fetching player {i + 1}/{total}")
             
-            # Fetch player data
+            # Fetch player data (includes built-in delay)
             result = await self.fetch_player_data(fid)
             results.append(result)
             
@@ -302,10 +317,6 @@ class LoginHandler:
                 # Retry after wait
                 result = await self.fetch_player_data(fid)
                 results[-1] = result
-            
-            # Add delay between requests
-            if i < total - 1:  # Don't delay after last request
-                await asyncio.sleep(self.request_delay)
         
         return results
     

@@ -114,7 +114,7 @@ class WCommand(commands.Cog):
                                 title=f"👤 {nickname}",
                                 description=(
                                     "━━━━━━━━━━━━━━━━━━━━━━\n"
-                                    f"**🆔 FID:** `{fid_value}`\n"
+                                    f"**🆔 ID:** `{fid_value}`\n"
                                     f"**🏰 Castle Level:** `{stove_level_name}`\n"
                                     f"**🌍 Kingdom:** `{kid}`\n"
                                     "━━━━━━━━━━━━━━━━━━━━━━\n"

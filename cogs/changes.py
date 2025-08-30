@@ -895,7 +895,7 @@ class MemberListView(discord.ui.View):
         await self.update_page(interaction)
 
     async def search_callback(self, interaction: discord.Interaction):
-        modal = FIDSearchModal(self.cog)
+        modal = IDSearchModal(self.cog)
         await interaction.response.send_modal(modal)
 
     async def update_page(self, interaction: discord.Interaction):
@@ -915,7 +915,7 @@ class MemberListView(discord.ui.View):
 
         await interaction.response.edit_message(embed=embed, view=self)
 
-class FIDSearchModal(discord.ui.Modal, title="Search by ID"):
+class IDSearchModal(discord.ui.Modal, title="Search by ID"):
     def __init__(self, cog):
         super().__init__()
         self.cog = cog
@@ -940,7 +940,7 @@ class FIDSearchModal(discord.ui.Modal, title="Search by ID"):
                 ephemeral=True
             )
         except Exception as e:
-            print(f"Error in FIDSearchModal on_submit: {e}")
+            print(f"Error in IDSearchModal on_submit: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     "❌ An error occurred while searching for the player.",
@@ -1121,7 +1121,7 @@ class MemberListViewNickname(discord.ui.View):
         await self.update_page(interaction)
 
     async def search_callback(self, interaction: discord.Interaction):
-        modal = FIDSearchModalNickname(self.cog)
+        modal = IDSearchModalNickname(self.cog)
         await interaction.response.send_modal(modal)
 
     async def update_page(self, interaction: discord.Interaction):
@@ -1141,7 +1141,7 @@ class MemberListViewNickname(discord.ui.View):
 
         await interaction.response.edit_message(embed=embed, view=self)
 
-class FIDSearchModalNickname(discord.ui.Modal, title="Search by ID"):
+class IDSearchModalNickname(discord.ui.Modal, title="Search by ID"):
     def __init__(self, cog):
         super().__init__()
         self.cog = cog
@@ -1166,7 +1166,7 @@ class FIDSearchModalNickname(discord.ui.Modal, title="Search by ID"):
                 ephemeral=True
             )
         except Exception as e:
-            print(f"Error in FIDSearchModalNickname on_submit: {e}")
+            print(f"Error in IDSearchModalNickname on_submit: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     "❌ An error occurred while searching for the player.",

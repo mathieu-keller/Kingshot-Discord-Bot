@@ -9,8 +9,6 @@ from datetime import datetime
 import sqlite3
 from discord.ext import tasks
 import asyncio
-import sys
-import base64
 import re
 import os
 import traceback
@@ -522,14 +520,14 @@ class GiftOperations(commands.Cog):
 
     def get_test_fid(self):
         """
-        Get the best available FID for testing/validation.
+        Get the best available ID for testing/validation.
         
         Priority:
-        1. Random alliance member FID (if any exist)
-        2. Default FID (27370737) as fallback
+        1. Random alliance member ID (if any exist)
+        2. Default ID (27370737) as fallback
         
         Returns:
-            str: The FID to use for testing
+            str: The ID to use for testing
         """
         try:
             # First try: Use a random alliance member
@@ -547,19 +545,19 @@ class GiftOperations(commands.Cog):
                     fid = member[0]
                     return fid
             
-            # Fallback: Use default FID
+            # Fallback: Use default ID
             return "27370737"
             
         except Exception as e:
-            self.logger.exception(f"Error getting test FID: {e}")
+            self.logger.exception(f"Error getting test ID: {e}")
             return "27370737"
     
     async def get_validation_fid(self):
-        """Get the best available FID for gift code validation.
+        """Get the best available ID for gift code validation.
         
         Priority:
-        1. Random alliance member FID (if any exist)
-        2. Default FID (27370737) as fallback
+        1. Random alliance member ID (if any exist)
+        2. Default ID (27370737) as fallback
 
         Returns:
             tuple: (fid, source) where source is 'alliance_member' or 'default'
@@ -578,11 +576,11 @@ class GiftOperations(commands.Cog):
                 
                 if member:
                     fid, nickname = member
-                    self.logger.info(f"Using alliance member FID for validation: {fid} ({nickname})")
+                    self.logger.info(f"Using alliance member ID for validation: {fid} ({nickname})")
                     return fid, 'alliance_member'
             
-            # Fallback: Use default FID
-            self.logger.info("No alliance members found, using default FID for validation: 27370737")
+            # Fallback: Use default ID
+            self.logger.info("No alliance members found, using default ID for validation: 27370737")
             return "27370737", 'default'
             
         except Exception as e:
@@ -603,10 +601,10 @@ class GiftOperations(commands.Cog):
             # Clean the gift code
             giftcode = self.clean_gift_code(giftcode)
             
-            # Get the best FID for validation
+            # Get the best ID for validation
             validation_fid, fid_source = await self.get_validation_fid()
             
-            self.logger.info(f"Validating gift code '{giftcode}' from {source} using {fid_source} FID: {validation_fid}")
+            self.logger.info(f"Validating gift code '{giftcode}' from {source} using {fid_source} ID: {validation_fid}")
             
             # Check if already validated
             self.cursor.execute("SELECT validation_status FROM gift_codes WHERE giftcode = ?", (giftcode,))
@@ -621,7 +619,7 @@ class GiftOperations(commands.Cog):
                     self.logger.info(f"Gift code '{giftcode}' already validated")
                     return True, "Code already validated"
             
-            # Perform validation using the selected FID
+            # Perform validation using the selected ID
             status = await self.claim_giftcode_rewards_wos(validation_fid, giftcode)
             
             # Handle validation results
@@ -639,7 +637,7 @@ class GiftOperations(commands.Cog):
                     self.logger.info(f"Gift code '{giftcode}' is valid but has requirements: {status}")
                 else:
                     validation_msg = f"Code validated successfully ({status})"
-                    self.logger.info(f"Gift code '{giftcode}' validated successfully using {fid_source} FID")
+                    self.logger.info(f"Gift code '{giftcode}' validated successfully using {fid_source} ID")
                 
                 return True, validation_msg
                 
@@ -723,7 +721,7 @@ class GiftOperations(commands.Cog):
             self.conn.rollback()
             
     def batch_get_user_giftcode_status(self, giftcode, fids):
-        """Batch retrieve user giftcode status for multiple FIDs."""
+        """Batch retrieve user giftcode status for multiple IDs."""
         if not fids:
             return {}
             
@@ -812,7 +810,7 @@ class GiftOperations(commands.Cog):
 
     async def attempt_gift_code_with_api(self, player_id, giftcode, session):
         """Attempt to redeem a gift code directly without captcha (Kingshot version)."""
-        self.logger.info(f"GiftOps: Attempting gift code redemption for FID {player_id} (no captcha required)")
+        self.logger.info(f"GiftOps: Attempting gift code redemption for ID {player_id} (no captcha required)")
         
         # Submit gift code directly without captcha
         data_to_encode = {
@@ -826,7 +824,7 @@ class GiftOperations(commands.Cog):
         response_giftcode = session.post(self.wos_giftcode_url, data=data)
         
         # Log the redemption attempt
-        log_entry_redeem = f"\n{datetime.now()} API REQ - Gift Code Redeem\nFID:{player_id}, Code:{giftcode}\n"
+        log_entry_redeem = f"\n{datetime.now()} API REQ - Gift Code Redeem\nID:{player_id}, Code:{giftcode}\n"
         try:
             response_json_redeem = response_giftcode.json()
             log_entry_redeem += f"Resp Code: {response_giftcode.status_code}\nResponse JSON:\n{json.dumps(response_json_redeem, indent=2)}\n"
@@ -859,15 +857,15 @@ class GiftOperations(commands.Cog):
             status = "LOGIN_EXPIRED_MID_PROCESS"
         elif "sign error" in msg.lower():
             status = "SIGN_ERROR"
-            self.logger.error(f"[SIGN ERROR] Sign error detected for FID {player_id}, code {giftcode}")
+            self.logger.error(f"[SIGN ERROR] Sign error detected for ID {player_id}, code {giftcode}")
             self.logger.error(f"[SIGN ERROR] Response: {response_json_redeem}")
         elif msg == "STOVE_LV ERROR" and err_code == 40006:
             status = "TOO_SMALL_SPEND_MORE"
-            self.logger.error(f"[FURNACE LVL ERROR] Furnace level is too low for FID {player_id}, code {giftcode}")
+            self.logger.error(f"[FURNACE LVL ERROR] Furnace level is too low for ID {player_id}, code {giftcode}")
             self.logger.error(f"[FURNACE LVL ERROR] Response: {response_json_redeem}")
         elif msg == "RECHARGE_MONEY ERROR" and err_code == 40017:
             status = "TOO_POOR_SPEND_MORE"
-            self.logger.error(f"[VIP LEVEL ERROR] VIP level is too low for FID {player_id}, code {giftcode}")
+            self.logger.error(f"[VIP LEVEL ERROR] VIP level is too low for ID {player_id}, code {giftcode}")
             self.logger.error(f"[VIP LEVEL ERROR] Response: {response_json_redeem}")
         else:
             status = "UNKNOWN_API_RESPONSE"
@@ -911,12 +909,12 @@ class GiftOperations(commands.Cog):
 
             if not login_successful:
                 status = "LOGIN_FAILED"
-                log_message = f"{datetime.now()} Login failed for FID {player_id}: {player_info_json.get('msg', 'Unknown')}\n"
+                log_message = f"{datetime.now()} Login failed for ID {player_id}: {player_info_json.get('msg', 'Unknown')}\n"
                 self.giftlog.info(log_message.strip())
                 return status
 
             # Try gift code redemption
-            self.logger.info(f"GiftOps: Starting gift code redemption for FID {player_id}")
+            self.logger.info(f"GiftOps: Starting gift code redemption for ID {player_id}")
             
             status, _, _, _ = await self.attempt_gift_code_with_api(
                 player_id, giftcode, session
@@ -959,7 +957,7 @@ class GiftOperations(commands.Cog):
                 f"Traceback:\n{error_details}\n"
                 f"---------------------------------------------------------------------\n"
             )
-            self.logger.exception(f"GiftOps: UNEXPECTED Error claiming code {giftcode} for FID {player_id}. Details logged.")
+            self.logger.exception(f"GiftOps: UNEXPECTED Error claiming code {giftcode} for ID {player_id}. Details logged.")
             try:
                 self.giftlog.error(log_message.strip())
             except Exception as log_e: self.logger.exception(f"GiftOps: CRITICAL - Failed to write unexpected error log: {log_e}")
@@ -970,9 +968,9 @@ class GiftOperations(commands.Cog):
             duration = process_end_time - process_start_time
             self.processing_stats["total_fids_processed"] += 1
             self.processing_stats["total_processing_time"] += duration
-            self.logger.info(f"GiftOps: claim_giftcode_rewards_wos completed for FID {player_id}. Status: {status}, Duration: {duration:.3f}s")
+            self.logger.info(f"GiftOps: claim_giftcode_rewards_wos completed for ID {player_id}. Status: {status}, Duration: {duration:.3f}s")
 
-        self.logger.info(f"GiftOps: Final status for FID {player_id} / Code '{giftcode}': {status}")
+        self.logger.info(f"GiftOps: Final status for ID {player_id} / Code '{giftcode}': {status}")
         return status
     
     async def scan_historical_messages(self, channel: discord.TextChannel, alliance_id: int) -> dict:
@@ -1286,9 +1284,9 @@ class GiftOperations(commands.Cog):
                 
                 self.logger.info(f"GiftOps: Found {len(codes_to_check)} codes to validate periodically.")
                 
-                # Get test FID for validation
+                # Get test ID for validation
                 test_fid, fid_source = await self.get_validation_fid()
-                self.logger.info(f"GiftOps: Using {fid_source} FID {test_fid} for periodic validation.")
+                self.logger.info(f"GiftOps: Using {fid_source} ID {test_fid} for periodic validation.")
                 
                 codes_checked = 0
                 codes_invalidated = 0
@@ -1303,7 +1301,7 @@ class GiftOperations(commands.Cog):
                     try:
                         self.logger.info(f"GiftOps: Periodically validating code '{giftcode}' (current status: {current_status})")
                         
-                        # Check the code with test FID
+                        # Check the code with test ID
                         status = await self.claim_giftcode_rewards_wos(test_fid, giftcode)
                         codes_checked += 1
                         
@@ -1470,9 +1468,11 @@ class GiftOperations(commands.Cog):
                 await message.add_reaction("✅")
                 await message.reply("Gift code successfully added.", mention_author=False)
         elif status == "TIME_ERROR":
-            await self.handle_time_error(message)
+            await message.add_reaction("❌")
+            await message.reply("Gift code expired.", mention_author=False)
         elif status == "CDK_NOT_FOUND":
-            await self.handle_cdk_not_found(message)
+            await message.add_reaction("❌")
+            await message.reply("The gift code is incorrect.", mention_author=False)
         elif status == "USAGE_LIMIT":
             await message.add_reaction("❌")
             await message.reply("Usage limit has been reached for this code.", mention_author=False)
@@ -1495,25 +1495,14 @@ class GiftOperations(commands.Cog):
                 await message.add_reaction("✅")
                 await message.reply("Gift code successfully added.", mention_author=False)
         elif status == "TIME_ERROR":
-            await self.handle_time_error(message)
+            await message.add_reaction("❌")
+            await message.reply("Gift code expired.", mention_author=False)
         elif status == "CDK_NOT_FOUND":
-            await self.handle_cdk_not_found(message)
+            await message.add_reaction("❌")
+            await message.reply("The gift code is incorrect.", mention_author=False)
         elif status == "USAGE_LIMIT":
             await message.add_reaction("❌")
             await message.reply("Usage limit has been reached for this code.", mention_author=False)
-
-    async def handle_cdk_not_found(self, message):
-        await message.add_reaction("❌")
-        await message.reply("The gift code is incorrect.", mention_author=False)
-
-    async def handle_time_error(self, message):
-        await message.add_reaction("❌")
-        await message.reply("Gift code expired.", mention_author=False)
-
-    async def handle_timeout_retry(self, message, giftcode):
-        self.cursor.execute("SELECT 1 FROM gift_codes WHERE giftcode = ?", (giftcode,))
-        if not self.cursor.fetchone():
-            await message.add_reaction("⏳")
 
     async def get_admin_info(self, user_id):
         self.settings_cursor.execute("""
@@ -3132,7 +3121,7 @@ class GiftOperations(commands.Cog):
                 self.logger.info(f"GiftOps: Code {giftcode} is already marked as 'invalid' in the database.")
                 final_invalid_reason_for_embed = "Code previously marked as invalid"
             else:
-                # If not marked 'invalid' in master table, check with test FID if status is 'pending' or for other cached issues
+                # If not marked 'invalid' in master table, check with test ID if status is 'pending' or for other cached issues
                 test_fid = self.get_test_fid()
                 self.cursor.execute("SELECT status FROM user_giftcodes WHERE fid = ? AND giftcode = ?", (test_fid, giftcode))
                 validation_fid_status_row = self.cursor.fetchone()
@@ -3140,7 +3129,7 @@ class GiftOperations(commands.Cog):
                 if validation_fid_status_row:
                     fid_status = validation_fid_status_row[0]
                     if fid_status in ["TIME_ERROR", "CDK_NOT_FOUND", "USAGE_LIMIT"]:
-                        self.logger.info(f"GiftOps: Code {giftcode} known to be invalid via test FID (status: {fid_status}). Marking invalid.")
+                        self.logger.info(f"GiftOps: Code {giftcode} known to be invalid via test ID (status: {fid_status}). Marking invalid.")
                         self.mark_code_invalid(giftcode)
                         if hasattr(self, 'api') and self.api:
                             asyncio.create_task(self.api.remove_giftcode(giftcode, from_validation=True))
@@ -3292,7 +3281,7 @@ class GiftOperations(commands.Cog):
                 # Process One Member
                 fid, nickname, current_cycle_count = active_members_to_process.pop(0)
 
-                self.logger.info(f"GiftOps: Processing FID {fid} ({nickname}), Cycle {current_cycle_count + 1}/{MAX_RETRY_CYCLES}")
+                self.logger.info(f"GiftOps: Processing ID {fid} ({nickname}), Cycle {current_cycle_count + 1}/{MAX_RETRY_CYCLES}")
 
                 response_status = "ERROR"
                 try:

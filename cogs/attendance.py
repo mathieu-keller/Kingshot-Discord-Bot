@@ -897,7 +897,7 @@ class PlayerSelectView(discord.ui.View):
                     fid = str(player[0])
                     nickname = player[1] if len(player) > 1 else ""
                 
-                # Check if filter matches FID or nickname (partial, case-insensitive)
+                # Check if filter matches ID or nickname (partial, case-insensitive)
                 if filter_lower in fid.lower() or filter_lower in nickname.lower():
                     self.filtered_players.append(player)
         
@@ -939,7 +939,7 @@ class PlayerSelectView(discord.ui.View):
                 status_emoji = self.cog._get_status_emoji(status)
                 
                 label = f"{status_emoji} {nickname[:40]}"
-                description = f"FID: {fid} | FC: {FC_LEVEL_MAPPING.get(furnace_lv, str(furnace_lv))}"
+                description = f"ID: {fid} | FC: {FC_LEVEL_MAPPING.get(furnace_lv, str(furnace_lv))}"
             else:
                 # Handle tuple format with 3 or 5 elements
                 if len(player) == 3:
@@ -966,7 +966,7 @@ class PlayerSelectView(discord.ui.View):
                     status_emoji = self.cog._get_status_emoji(status)
                 
                 label = f"{status_emoji} {nickname[:40]}"
-                description = f"FID: {fid} | FC: {FC_LEVEL_MAPPING.get(furnace_lv, str(furnace_lv))}"
+                description = f"ID: {fid} | FC: {FC_LEVEL_MAPPING.get(furnace_lv, str(furnace_lv))}"
                 
             options.append(discord.SelectOption(
                 label=label,
@@ -1075,7 +1075,7 @@ class PlayerSelectView(discord.ui.View):
             title=f"📋 Mark Attendance - {nickname}",
             description=(
                 f"**Player:** {nickname}\n"
-                f"**FID:** {fid}\n"
+                f"**ID:** {fid}\n"
                 f"**FC:** {FC_LEVEL_MAPPING.get(furnace_lv, str(furnace_lv))}\n"
                 f"**Session:** {self.session_name}\n\n"
                 "Please select the attendance status for this player:"
@@ -1311,7 +1311,7 @@ class AttendanceModal(discord.ui.Modal):
                 user_cursor.execute("SELECT alliance FROM users WHERE fid = ?", (self.fid,))
                 user_result = user_cursor.fetchone()
                 if not user_result:
-                    raise ValueError(f"User with FID {self.fid} not found in database")
+                    raise ValueError(f"User with ID {self.fid} not found in database")
                 alliance_id = user_result[0]
                 
                 # Get alliance name
@@ -1488,7 +1488,7 @@ class PlayerAttendanceView(discord.ui.View):
                 user_cursor.execute("SELECT alliance FROM users WHERE fid = ?", (self.fid,))
                 user_result = user_cursor.fetchone()
                 if not user_result:
-                    raise ValueError(f"User with FID {self.fid} not found in database")
+                    raise ValueError(f"User with ID {self.fid} not found in database")
                 alliance_id = user_result[0]
                 
                 # Get alliance name

@@ -12,7 +12,7 @@ Kingshot Discord Bot that supports alliance management, event reminders and atte
 
  - If you run your bot non-interactively, for example as a systemd service on Linux, you should run `--autoupdate` to prevent the bot from using the interactive update prompt.
 
-- ⚠️ If you run your bot on Windows, there is a known issue with onnxruntime + an outdated Visual C++ library. To overcome this, install [the latest version of Visual C++](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170) and then run `main.py` again.
+- ⚠️ If you run your bot on Windows, there is a known issue with onnxruntime + an outdated Visual C++ library. To overcome this, install [the latest version of Visual C++](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170) in both 32-bit and 64-bit variants, and then run `main.py` again.
 
 ## ☁️ Hosting Providers
 
@@ -68,6 +68,16 @@ Next to the Generated URL at the bottom of the page, click **Copy** and then pas
 10. Save this token in a text file named `bot_token.txt`. **Keep it safe!** You will also need it later on in the instructions.
 
 ### Bot Installation Steps
+
+#### Option 1: Windows-Only AutoRun Method
+
+If you intend to run the bot on Windows, `ikketim` has developed a batch script that you can use simple by double-clicking on it. It will open a command prompt window and guide you through the installation, or otherwise start the bot if it's already installed.
+
+To use this method, just download the [windowsAutoRun.bat](https://github.com/kingshot-project/Kingshot-Discord-Bot/blob/main/install/windowsAutoRun.bat) script, put it into the folder where you want the bot installed, and double-click on it, then follow the instructions on the screen. You should enter `2` for Kingshot when prompted which game you'd like to install the bot for, and enter the bot token .
+
+#### Option 2: Standard Install
+
+Those not running the bot on Windows should use the following installation method:
 
 1. **Download the Bot files from Github, for example with [git](https://git-scm.com/downloads):**
    ```bash
@@ -182,9 +192,124 @@ To run with automatic updates (for non-interactive environments):
 python main.py --autoupdate
 ```
 
+##  🛠️ Version v1.3.0 (Current)
+
+### 📋 TL;DR Summary
+- 🖼️ Gift Codes are now shared and distributed via API
+- 👥 Minister Scheduling system for KvK prep
+- 📊 Attendance tracking system for all events
+- 🔐 Centralized Login Handler for API operations
+- ⚡ Alliance and Control systems completely overhauled for speed
+- ♻️ Repair option to fix any issues with missing files added
+- ⚠️ Beta option to pull the latest repository code directly
+
+### 🔄 Update System Overhaul
+- **Added a few new options:**
+  - `--beta` flag to pull directly from repository.
+  ⚠️ **This runs unstable code:** Use at your own risk!
+  - `--repair` which will attempt to repair by forcing an update to fix any missing files.
+- Smart update system compares files via SHA hashing - only replaces changed files
+- If requirements or cogs are missing, the bot will load but advise to run `--repair` option
+
+### 🤝 Alliance Improvements
+
+#### Performance & Reliability
+- Member add operations are now faster: **1 member per 2 seconds** without interruption
+- Properly respects API rate limits to prevent delays
+- Centralized queue system prevents operation conflicts via new login_handler.py
+- Better error handling and user feedback
+
+#### Enhanced Member Management
+- Accept IDs in multiple formats: comma-separated OR newline-separated lists
+- Smart validation checks if members already exist before API calls
+- Improved progress tracking with cleaner embed updates
+
+### 🎛️ Control System Overhaul
+
+#### Speed Improvements
+- Alliance control operations are now faster: **1 member per 2 seconds** without interruption
+- Removed unnecessary 1-minute delays between manual all alliance checks
+- Properly respects API rate limits to prevent delays
+
+#### Logging & Maintenance
+- New dedicated log file: `log/alliance_control.txt`
+- Automatic log rotation (1MB max size with 1 backup)
+- Console output significantly reduced - no more spam!
+- Auto-removes invalid IDs (error 40004) from database
+- Tracks all removed IDs for audit purposes
+
+### 🎁 Gift Operations Upgrade
+
+#### Interface Improvements
+- Reorganized menu with new `Settings` button containing:
+  - Channel Management
+  - Automatic Redemption
+  - Channel History Scan
+  - Clear Redemption Cache
+- Instant validation for all new gift codes
+- Periodic code validation every 2 hours
+- Smart priority system for validation IDs
+- Immediate processing of new messages in gift code channels
+- On-demand gift code channel history scan (up to 75 messages)
+- Extended menu timeouts to 2 hours
+- Optimized database transactions
+- Error breakdown added if any errors occurred during redemption
+- For more details on errors, please check `log/gift_ops.txt`
+
+### 🔐 Login Handler (New Cog)
+
+#### Centralized API Management
+- Controls all Gift API login operations
+- Maintains **1 login per 2 seconds** rate without delays
+- Queue system prevents operation overlap
+- Currently used by alliance cogs - more integrations coming!
+
+### 📊 Attendance System (New Cog)
+*Enhanced version of Leo's custom cog*
+
+#### Event Tracking Features
+- Track attendance for any in-game events (Bear, Swordland, KvK, etc.)
+- Automatic history tracking to identify repeat no-shows
+- Create and edit attendance reports for any alliance
+
+#### Reporting Options
+- **Visual reports:** Matplotlib-based structured reports
+- **Text reports:** Clean formatted text
+- **Export formats:** CSV, TSV, and HTML
+
+#### Buttons
+- `Mark Attendance` - Create or edit attendance reports
+- `View Attendance` - Review and export existing reports
+- `Settings` - Switch between matplotlib and text reports
+
+### 👥 Minister Scheduling (New Cog)
+*Enhanced version of Destrimna's custom cog*
+
+#### SvS Prep Management
+- Easy scheduling for Construction, Research, and Training days
+- Dual interface: slash commands OR interactive buttons
+- Settings menu for global admins with options to clear data/channels
+
+#### Channel Integration
+- Dedicated channels for each prep day
+- Auto-updating slot availability display
+- Comprehensive logging of all minister activities
+
+#### Slash Commands
+- `/minister_add` - Book a minister slot
+- `/minister_remove` - Cancel a booking
+- `/minister_list` - View all appointments
+- `/minister_clear_all` - Reset all bookings
+
+### Other Changes
+- FIDs are now called IDs to avoid confusion (as they always should have been).
+- Many minor changes and fixes.
+
 ## 📜 Version History
 
-### V1.1.1 (Current)
+### V1.1.1
+- Changes the bot updater to point to the new kingshot-project repository.
+- Updates the windowsAutoRun.bat script to provide choice of which bot to install (WOS or KS).
 
 ### V1.1.0
 - Significant modification of `main.py`, migrating to a new and improved Github Release-based update system. No replacement of `main.py` is needed, just restart the bot running V1.0 and it will prompt to update.

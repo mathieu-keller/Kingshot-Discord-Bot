@@ -54,5 +54,5 @@ jobs:
             {
               "username": "${{ secrets.DOCKER_USER }}",
               "version": "${{ needs.release.outputs.new_version }}",
-              "mount_folder": "${{ secrets.mount_folder }}"
+              "mount_folder": "${{ secrets.MOUNT_FOLDER }}"
             }

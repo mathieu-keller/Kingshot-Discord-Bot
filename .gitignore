@@ -12,3 +12,7 @@
 !install/*
 !fonts/
 !fonts/*
+!Dockerfile
+!.github
+!.github/**/*
+!stack-definition.yml

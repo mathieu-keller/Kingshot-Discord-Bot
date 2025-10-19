@@ -1,0 +1,58 @@
+name: Build Service
+
+on:
+  pull_request:
+  push:
+    branches:
+      - 'main'
+
+jobs:
+  dry-release:
+    name: dry release
+    uses: mathieu-keller/github-action-workflows/.github/workflows/semantic-release.yaml@2.1.2
+    with:
+      release-branch: main
+      dry: true
+  docker_build:
+    name: build docker
+    runs-on: ubuntu-24.04
+    needs: [ dry-release ]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USER }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+      - name: Build
+        run: docker build . -t ${{ secrets.DOCKER_USER }}/bot:${{ needs.dry-release.outputs.new_version }}
+      - name: push
+        run: docker push ${{ secrets.DOCKER_USER }}/bot:${{ needs.dry-release.outputs.new_version }}
+  release:
+    name: create release
+    needs: [ docker_build, dry-release ]
+    if: ${{ github.ref == 'refs/heads/main' && needs.dry-release.outputs.has_new_version == 'true'}}
+    uses: mathieu-keller/github-action-workflows/.github/workflows/semantic-release.yaml@2.1.2
+    with:
+      release-branch: main
+      dry: false
+  deploy:
+    name: deploy
+    needs: [ release ]
+    runs-on: ubuntu-24.04
+    env:
+      NODE_TLS_REJECT_UNAUTHORIZED: '0'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: mathieu-keller/action-stack-deploy-to-portainer@1.0.3
+        with:
+          portainerStackName: 'kingshot-bot'
+          portainerFilePath: 'stack-definition.yml'
+          portainerHost: ${{ secrets.PORTAINER_HOST }}
+          portainerApiKey: ${{ secrets.PORTAINER_API_KEY }}
+          portainerEnvVars: >
+            {
+              "username": "${{ secrets.DOCKER_USER }}",
+              "version": "${{ needs.release.outputs.new_version }}",
+              "mount_folder": "${{ secrets.mount_folder }}"
+            }

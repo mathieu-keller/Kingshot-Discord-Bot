@@ -1,15 +1,9 @@
 version: "3"
 
-networks:
-  bot:
-    external: false
-
 services:
   backend:
     image: {{username}}/bot:{{version}}
     restart: always
-    networks:
-      - bot
     environment:
       - TZ=UTC
     volumes:

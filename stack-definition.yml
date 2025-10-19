@@ -6,10 +6,6 @@ networks:
 
 services:
   backend:
-    depends_on:
-      db:
-        condition: service_healthy
-        restart: true
     image: {{username}}/bot:{{version}}
     restart: always
     networks:

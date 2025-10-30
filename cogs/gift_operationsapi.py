@@ -18,8 +18,8 @@ class GiftCodeAPI:
         self.api_key = "super_secret_bot_token_nobody_will_ever_find"
         
         # Random 5-10min check interval to help reduce API load
-        self.min_check_interval = 300
-        self.max_check_interval = 600
+        self.min_check_interval = 900
+        self.max_check_interval = 1200
         self.check_interval = random.randint(self.min_check_interval, self.max_check_interval)
         
         # Rate limiting controls

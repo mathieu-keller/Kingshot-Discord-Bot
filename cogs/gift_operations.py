@@ -18,7 +18,6 @@ import logging
 import logging.handlers
 from .alliance_member_operations import AllianceSelectView
 from .alliance import PaginatedChannelView
-from .gift_operationsapi import GiftCodeAPI
 from collections import deque
 
 class GiftOperations(commands.Cog):
@@ -68,8 +67,6 @@ class GiftOperations(commands.Cog):
             self.conn = sqlite3.connect('db/giftcode.sqlite')
             self.cursor = self.conn.cursor()
 
-        # API Setup
-        self.api = GiftCodeAPI(bot)
 
         # Gift Code Control Table
         self.cursor.execute("""
@@ -654,10 +651,7 @@ class GiftOperations(commands.Cog):
                 
                 self.logger.warning(f"Gift code '{giftcode}' is invalid: {reason}")
                 
-                # Remove from API if needed
-                if hasattr(self, 'api') and self.api:
-                    asyncio.create_task(self.api.remove_giftcode(giftcode, from_validation=True))
-                
+
                 return False, reason
                 
             else: # Other statuses - don't mark as invalid yet
@@ -938,11 +932,8 @@ class GiftOperations(commands.Cog):
                         
                         # If this code was just validated for the first time, send to API
                         self.logger.info(f"Code '{giftcode}' validated for the first time - sending to API")
-                        try:
-                            asyncio.create_task(self.api.add_giftcode(giftcode))
-                        except Exception as api_err:
-                            self.logger.exception(f"Error sending validated code '{giftcode}' to API: {api_err}")
-                    
+
+
                     self.giftlog.info(f"DATABASE - Saved/Updated status for User {player_id}, Code '{giftcode}', Status {status}\n")
                 except Exception as db_err:
                     self.giftlog.exception(f"DATABASE ERROR saving/replacing status for {player_id}/{giftcode}: {db_err}\n")
@@ -1315,10 +1306,6 @@ class GiftOperations(commands.Cog):
                             
                             codes_invalidated += 1
                             
-                            # Remove from API if present
-                            if hasattr(self, 'api') and self.api:
-                                asyncio.create_task(self.api.remove_giftcode(giftcode, from_validation=True))
-                            
                             # Notify admins about invalidated code
                             self.settings_cursor.execute("SELECT id FROM admin WHERE is_initial = 1")
                             admin_ids = [row[0] for row in self.settings_cursor.fetchall()]
@@ -1346,10 +1333,7 @@ class GiftOperations(commands.Cog):
                                 self.cursor.execute("UPDATE gift_codes SET validation_status = 'validated' WHERE giftcode = ? AND validation_status = 'pending'", (giftcode,))
                                 self.conn.commit()
                                 
-                                # Send to API if newly validated
-                                if hasattr(self, 'api') and self.api:
-                                    asyncio.create_task(self.api.add_giftcode(giftcode))
-                        
+
                         else:
                             self.logger.info(f"GiftOps: Code '{giftcode}' returned status '{status}' during periodic validation.")
                             
@@ -1405,14 +1389,6 @@ class GiftOperations(commands.Cog):
                     self.cursor.execute("DELETE FROM user_giftcodes WHERE giftcode = ? AND fid = ?", (giftcode, test_fid))
                     self.conn.commit()
                     
-                    if hasattr(self, 'api') and self.api:
-                        asyncio.create_task(self.api.remove_giftcode(giftcode, from_validation=True))
-
-                    reason_map = {
-                        "TIME_ERROR": "Code has expired (TIME_ERROR)",
-                        "CDK_NOT_FOUND": "Code not found or incorrect (CDK_NOT_FOUND)",
-                        "USAGE_LIMIT": "Usage limit reached (USAGE_LIMIT)"
-                    }
                     detailed_reason = reason_map.get(status, f"Code invalid ({status})")
 
                     admin_embed = discord.Embed(
@@ -1442,9 +1418,7 @@ class GiftOperations(commands.Cog):
                     self.cursor.execute("UPDATE gift_codes SET validation_status = 'validated' WHERE giftcode = ? AND validation_status = 'pending'", (giftcode,))
                     self.conn.commit()
 
-                    if hasattr(self, 'api') and self.api:
-                        asyncio.create_task(self.api.add_giftcode(giftcode))
-                    
+
                 await asyncio.sleep(60)
                 
         except Exception as e:
@@ -3131,9 +3105,7 @@ class GiftOperations(commands.Cog):
                     if fid_status in ["TIME_ERROR", "CDK_NOT_FOUND", "USAGE_LIMIT"]:
                         self.logger.info(f"GiftOps: Code {giftcode} known to be invalid via test ID (status: {fid_status}). Marking invalid.")
                         self.mark_code_invalid(giftcode)
-                        if hasattr(self, 'api') and self.api:
-                            asyncio.create_task(self.api.remove_giftcode(giftcode, from_validation=True))
-                        
+
                         reason_map_fid = {
                             "TIME_ERROR": "Code has expired (TIME_ERROR)",
                             "CDK_NOT_FOUND": "Code not found or incorrect (CDK_NOT_FOUND)",
@@ -3299,9 +3271,6 @@ class GiftOperations(commands.Cog):
                     # Mark as invalid
                     self.mark_code_invalid(giftcode)
                     
-                    if hasattr(self, 'api') and self.api:
-                        asyncio.create_task(self.api.remove_giftcode(giftcode, from_validation=True))
-
                     reason_map_runtime = {
                         "TIME_ERROR": "Code has expired (TIME_ERROR)",
                         "CDK_NOT_FOUND": "Code not found or incorrect (CDK_NOT_FOUND)",
@@ -3567,9 +3536,7 @@ class CreateGiftCodeModal(discord.ui.Modal):
             if is_valid: # Valid code - send to API and add to DB
                 logger.info(f"[CreateGiftCodeModal] Code '{code}' validated successfully.")
                 
-                if hasattr(self.cog, 'api') and self.cog.api:
-                    asyncio.create_task(self.cog.api.add_giftcode(code))
-                
+
                 final_embed.title = "✅ Gift Code Validated"
                 final_embed.description = (
                     f"**Gift Code Details**\n━━━━━━━━━━━━━━━━━━━━━━\n"

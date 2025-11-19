@@ -1,11 +1,19 @@
 version: "3"
 
 services:
-  backend:
+  kim-backend:
     image: {{username}}/bot:{{version}}
     restart: always
     environment:
       - TZ=UTC
     volumes:
-      - {{mount_folder}}/db:/app/db
-      - {{mount_folder}}/bot_token.txt:/app/bot_token.txt
+      - {{mount_folder}}/kim/db:/app/db
+      - {{mount_folder}}/kim/bot_token.txt:/app/bot_token.txt
+  rad-backend:
+    image: {{username}}/bot:{{version}}
+    restart: always
+    environment:
+      - TZ=UTC
+    volumes:
+      - {{mount_folder}}/rad/db:/app/db
+      - {{mount_folder}}/rad/bot_token.txt:/app/bot_token.txt

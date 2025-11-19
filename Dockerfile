@@ -3,4 +3,4 @@ LABEL authors="mathieu"
 WORKDIR /app
 COPY . .
 RUN python install/install.py
-ENTRYPOINT ["python", "main.py", "--autoupdate"]
+ENTRYPOINT ["python", "main.py", "--no-update"]

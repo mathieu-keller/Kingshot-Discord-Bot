@@ -5,6 +5,7 @@ services:
     image: {{username}}/bot:{{version}}
     restart: always
     environment:
+      - UPDATE=0
       - TZ=UTC
     volumes:
       - {{mount_folder}}/kim/db:/app/db
@@ -13,6 +14,7 @@ services:
     image: {{username}}/bot:{{version}}
     restart: always
     environment:
+      - UPDATE=0
       - TZ=UTC
     volumes:
       - {{mount_folder}}/rad/db:/app/db

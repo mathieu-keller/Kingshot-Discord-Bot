@@ -939,7 +939,7 @@ class PlayerSelectView(discord.ui.View):
                 status_emoji = self.cog._get_status_emoji(status)
                 
                 label = f"{status_emoji} {nickname[:40]}"
-                description = f"ID: {fid} | FC: {FC_LEVEL_MAPPING.get(furnace_lv, str(furnace_lv))}"
+                description = f"ID: {fid} | TC: {FC_LEVEL_MAPPING.get(furnace_lv, str(furnace_lv))}"
             else:
                 # Handle tuple format with 3 or 5 elements
                 if len(player) == 3:
@@ -966,7 +966,7 @@ class PlayerSelectView(discord.ui.View):
                     status_emoji = self.cog._get_status_emoji(status)
                 
                 label = f"{status_emoji} {nickname[:40]}"
-                description = f"ID: {fid} | FC: {FC_LEVEL_MAPPING.get(furnace_lv, str(furnace_lv))}"
+                description = f"ID: {fid} | TC: {FC_LEVEL_MAPPING.get(furnace_lv, str(furnace_lv))}"
                 
             options.append(discord.SelectOption(
                 label=label,
@@ -1076,7 +1076,7 @@ class PlayerSelectView(discord.ui.View):
             description=(
                 f"**Player:** {nickname}\n"
                 f"**ID:** {fid}\n"
-                f"**FC:** {FC_LEVEL_MAPPING.get(furnace_lv, str(furnace_lv))}\n"
+                f"**TC:** {FC_LEVEL_MAPPING.get(furnace_lv, str(furnace_lv))}\n"
                 f"**Session:** {self.session_name}\n\n"
                 "Please select the attendance status for this player:"
             ),

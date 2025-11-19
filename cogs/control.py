@@ -318,7 +318,7 @@ class Control(commands.Cog):
             if furnace_changes:
                 await self.send_embed(
                     channel=channel,
-                    title=f"🔥 **{alliance_name}** Furnace Level Changes",
+                    title=f"🔥 **{alliance_name}** Town Center Level Changes",
                     description=safe_list(furnace_changes),
                     color=discord.Color.orange(),
                     footer=f"📊 Total Changes: {len(furnace_changes)}"

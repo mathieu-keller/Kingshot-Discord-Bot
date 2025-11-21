@@ -196,7 +196,7 @@ class Alliance(commands.Cog):
                 emoji="📜",
                 style=discord.ButtonStyle.primary,
                 custom_id="alliance_history",
-                row=2
+                row=1
             ))
             view.add_item(discord.ui.Button(
                 label="Support Operations",
@@ -210,7 +210,7 @@ class Alliance(commands.Cog):
                 emoji="🔧",
                 style=discord.ButtonStyle.primary,
                 custom_id="other_features",
-                row=3
+                row=2
             ))
 
             if admin_count == 0:

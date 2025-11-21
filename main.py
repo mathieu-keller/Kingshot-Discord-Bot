@@ -595,7 +595,7 @@ if __name__ == "__main__":
     create_tables()
 
     async def load_cogs():
-        cogs = ["control", "alliance", "alliance_member_operations", "bot_operations", "logsystem", "support_operations", "gift_operations", "changes", "w", "wel", "other_features", "bear_trap", "id_channel", "backup_operations", "bear_trap_editor", "attendance_report", "attendance", "minister_menu", "minister_schedule"]
+        cogs = ["control", "alliance", "alliance_member_operations", "bot_operations", "logsystem", "support_operations", "changes", "w", "wel", "other_features", "bear_trap", "id_channel", "backup_operations", "bear_trap_editor", "attendance_report", "attendance", "minister_menu", "minister_schedule"]
         
         failed_cogs = []
         

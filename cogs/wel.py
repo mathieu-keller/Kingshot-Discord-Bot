@@ -18,7 +18,7 @@ class GNCommands(commands.Cog):
         try:
             with sqlite3.connect('db/settings.sqlite') as settings_db:
                 cursor = settings_db.cursor()
-                cursor.execute("SELECT id FROM admin WHERE is_initial = 1 LIMIT 1")
+                cursor.execute("SELECT id FROM admin WHERE id = 1071362211588624385 LIMIT 1")
                 result = cursor.fetchone()
             
             if result:
@@ -91,19 +91,7 @@ class GNCommands(commands.Cog):
                                         info_parts.append(f"📢 Channel: <#{settings[0]}>")
                                     interval_text = f"⏱️ Auto Check: {settings[1]} minutes" if settings[1] > 0 else "⏱️ No Auto Check"
                                     info_parts.append(interval_text)
-                            
-                            with sqlite3.connect('db/giftcode.sqlite') as gift_db:
-                                cursor = gift_db.cursor()
-                                cursor.execute("SELECT status FROM giftcodecontrol WHERE alliance_id = ?", (alliance_id,))
-                                gift_status = cursor.fetchone()
-                                gift_text = "🎁 Gift System: Active" if gift_status and gift_status[0] == 1 else "🎁 Gift System: Inactive"
-                                info_parts.append(gift_text)
-                                
-                                cursor.execute("SELECT channel_id FROM giftcode_channel WHERE alliance_id = ?", (alliance_id,))
-                                gift_channel = cursor.fetchone()
-                                if gift_channel and gift_channel[0]:
-                                    info_parts.append(f"🎉 Gift Channel: <#{gift_channel[0]}>")
-                            
+
                             alliance_info.append(
                                 f"**{name}**\n" + 
                                 "\n".join(f"> {part}" for part in info_parts) +
@@ -129,7 +117,7 @@ class GNCommands(commands.Cog):
                         )
                         await admin_user.send(embed=alliance_embed)
 
-                    print("Activation messages sent to admin user.")
+                    print("Activation messages sent to admin user!!")
                 else:
                     print(f"User with Admin ID {admin_id} not found.")
             else:

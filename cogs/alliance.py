@@ -16,9 +16,6 @@ class Alliance(commands.Cog):
         
         self.conn_settings = sqlite3.connect('db/settings.sqlite')
         self.c_settings = self.conn_settings.cursor()
-        
-        self.conn_giftcode = sqlite3.connect('db/giftcode.sqlite')
-        self.c_giftcode = self.conn_giftcode.cursor()
 
         self._create_table()
         self._check_and_add_column()
@@ -163,8 +160,6 @@ class Alliance(commands.Cog):
                     "└ Add, remove, and view members\n\n"
                     "🤖 **Bot Operations**\n"
                     "└ Configure bot settings\n\n"
-                    "🎁 **Gift Code Operations**\n"
-                    "└ Manage gift codes and rewards\n\n"
                     "📜 **Alliance History**\n"
                     "└ View alliance changes and history\n\n"
                     "🆘 **Support Operations**\n"
@@ -194,13 +189,6 @@ class Alliance(commands.Cog):
                 emoji="🤖",
                 style=discord.ButtonStyle.primary,
                 custom_id="bot_operations",
-                row=1
-            ))
-            view.add_item(discord.ui.Button(
-                label="Gift Operations",
-                emoji="🎁",
-                style=discord.ButtonStyle.primary,
-                custom_id="gift_code_operations",
                 row=1
             ))
             view.add_item(discord.ui.Button(
@@ -254,8 +242,6 @@ class Alliance(commands.Cog):
                     "└ Add, remove, and view members\n\n"
                     "🤖 **Bot Operations**\n"
                     "└ Configure bot settings\n\n"
-                    "🎁 **Gift Code Operations**\n"
-                    "└ Manage gift codes and rewards\n\n"
                     "📜 **Alliance History**\n"
                     "└ View alliance changes and history\n\n"
                     "🆘 **Support Operations**\n"
@@ -285,13 +271,6 @@ class Alliance(commands.Cog):
                 emoji="🤖",
                 style=discord.ButtonStyle.primary,
                 custom_id="bot_operations",
-                row=1
-            ))
-            view.add_item(discord.ui.Button(
-                label="Gift Operations",
-                emoji="🎁",
-                style=discord.ButtonStyle.primary,
-                custom_id="gift_code_operations",
                 row=1
             ))
             view.add_item(discord.ui.Button(
@@ -602,30 +581,6 @@ class Alliance(commands.Cog):
                                 "An error occurred while loading Bot Operations.",
                                 ephemeral=True
                             )
-
-                elif custom_id == "gift_code_operations":
-                    try:
-                        gift_ops_cog = interaction.client.get_cog("GiftOperations")
-                        if gift_ops_cog:
-                            await gift_ops_cog.show_gift_menu(interaction)
-                        else:
-                            await interaction.response.send_message(
-                                "❌ Gift Operations module not found.",
-                                ephemeral=True
-                            )
-                    except Exception as e:
-                        print(f"Gift operations error: {e}")
-                        if not interaction.response.is_done():
-                            await interaction.response.send_message(
-                                "An error occurred while loading Gift Operations.",
-                                ephemeral=True
-                            )
-                        else:
-                            await interaction.followup.send(
-                                "An error occurred while loading Gift Operations.",
-                                ephemeral=True
-                            )
-
                 elif custom_id == "add_alliance":
                     if admin[1] != 1:
                         await interaction.response.send_message("You do not have permission to perform this action.", ephemeral=True)
@@ -771,12 +726,6 @@ class Alliance(commands.Cog):
                     self.c.execute("INSERT INTO alliancesettings (alliance_id, channel_id, interval) VALUES (?, ?, ?)", 
                                  (alliance_id, channel_id, interval))
                     self.conn.commit()
-
-                    self.c_giftcode.execute("""
-                        INSERT INTO giftcodecontrol (alliance_id, status) 
-                        VALUES (?, 1)
-                    """, (alliance_id,))
-                    self.conn_giftcode.commit()
 
                     result_embed = discord.Embed(
                         title="✅ Alliance Successfully Created",
@@ -1143,12 +1092,6 @@ class Alliance(commands.Cog):
             self.c_settings.execute("SELECT COUNT(*) FROM adminserver WHERE alliances_id = ?", (alliance_id,))
             admin_server_count = self.c_settings.fetchone()[0]
 
-            self.c_giftcode.execute("SELECT COUNT(*) FROM giftcode_channel WHERE alliance_id = ?", (alliance_id,))
-            gift_channels_count = self.c_giftcode.fetchone()[0]
-
-            self.c_giftcode.execute("SELECT COUNT(*) FROM giftcodecontrol WHERE alliance_id = ?", (alliance_id,))
-            gift_code_control_count = self.c_giftcode.fetchone()[0]
-
             confirm_embed = discord.Embed(
                 title="⚠️ Confirm Alliance Deletion",
                 description=(
@@ -1161,8 +1104,6 @@ class Alliance(commands.Cog):
                     f"⚙️ Alliance Settings: {settings_count}\n"
                     f"👥 User Records: {users_count}\n"
                     f"🏰 Admin Server Records: {admin_server_count}\n"
-                    f"📢 Gift Channels: {gift_channels_count}\n"
-                    f"📊 Gift Code Controls: {gift_code_control_count}\n\n"
                     "**⚠️ WARNING: This action cannot be undone!**"
                 ),
                 color=discord.Color.red()
@@ -1188,14 +1129,6 @@ class Alliance(commands.Cog):
                     admin_server_count = self.c_settings.rowcount
                     self.conn_settings.commit()
 
-                    self.c_giftcode.execute("DELETE FROM giftcode_channel WHERE alliance_id = ?", (alliance_id,))
-                    gift_channels_count = self.c_giftcode.rowcount
-
-                    self.c_giftcode.execute("DELETE FROM giftcodecontrol WHERE alliance_id = ?", (alliance_id,))
-                    gift_code_control_count = self.c_giftcode.rowcount
-                    
-                    self.conn_giftcode.commit()
-
                     cleanup_embed = discord.Embed(
                         title="✅ Alliance Successfully Deleted",
                         description=(
@@ -1204,9 +1137,7 @@ class Alliance(commands.Cog):
                             f"🛡️ Alliance Records: {alliance_count}\n"
                             f"👥 Users Removed: {users_count_deleted}\n"
                             f"⚙️ Alliance Settings: {admin_settings_count}\n"
-                            f"🏰 Admin Server Records: {admin_server_count}\n"
-                            f"📢 Gift Channels: {gift_channels_count}\n"
-                            f"📊 Gift Code Controls: {gift_code_control_count}"
+                            f"🏰 Admin Server Records: {admin_server_count}"
                         ),
                         color=discord.Color.green()
                     )

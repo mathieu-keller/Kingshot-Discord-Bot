@@ -531,7 +531,6 @@ if __name__ == "__main__":
     # Database setup
     databases = {
         "conn_alliance": "db/alliance.sqlite",
-        "conn_giftcode": "db/giftcode.sqlite",
         "conn_changes": "db/changes.sqlite",
         "conn_users": "db/users.sqlite",
         "conn_settings": "db/settings.sqlite",
@@ -579,21 +578,6 @@ if __name__ == "__main__":
                 stove_lv_content TEXT, 
                 alliance TEXT
             )""")
-
-        with connections["conn_giftcode"] as conn_giftcode:
-            conn_giftcode.execute("""CREATE TABLE IF NOT EXISTS gift_codes (
-                giftcode TEXT PRIMARY KEY, 
-                date TEXT
-            )""")
-            
-            conn_giftcode.execute("""CREATE TABLE IF NOT EXISTS user_giftcodes (
-                fid INTEGER, 
-                giftcode TEXT, 
-                status TEXT, 
-                PRIMARY KEY (fid, giftcode),
-                FOREIGN KEY (giftcode) REFERENCES gift_codes (giftcode)
-            )""")
-
         with connections["conn_alliance"] as conn_alliance:
             conn_alliance.execute("""CREATE TABLE IF NOT EXISTS alliancesettings (
                 alliance_id INTEGER PRIMARY KEY, 

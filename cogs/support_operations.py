@@ -91,7 +91,6 @@ class SupportView(discord.ui.View):
                 "**Features**\n"
                 "━━━━━━━━━━━━━━━━━━━━━━\n"
                 "• Alliance member management\n"
-                "• Gift code operations\n"
                 "• Automated member tracking\n"
                 "• Bear trap notifications\n"
                 "• ID channel verification\n"

@@ -114,7 +114,7 @@ class AllianceMemberOperations(commands.Cog):
         for level_range, emoji in self.fl_emojis.items():
             if fl_level in level_range:
                 return emoji
-        return "🔥"
+        return "🏰"
 
     async def handle_member_operations(self, interaction: discord.Interaction):
         embed = discord.Embed(

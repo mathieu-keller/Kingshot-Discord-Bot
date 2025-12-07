@@ -289,7 +289,7 @@ class Control(commands.Cog):
                                 self.conn_changes.commit()
                                 self.cursor_users.execute("UPDATE users SET furnace_lv = ? WHERE fid = ?", (new_furnace_lv, fid))
                                 self.conn_users.commit()
-                                furnace_changes.append(f"👤 **{old_nickname}**\n🔥 `{old_furnace_display}` ➡️ `{new_furnace_display}`")
+                                furnace_changes.append(f"👤 **{old_nickname}**\n🏰 `{old_furnace_display}` ➡️ `{new_furnace_display}`")
 
                             if new_nickname.lower() != old_nickname.lower().strip():
                                 self.cursor_changes.execute("INSERT INTO nickname_changes (fid, old_nickname, new_nickname, change_date) VALUES (?, ?, ?, ?)",
@@ -318,7 +318,7 @@ class Control(commands.Cog):
             if furnace_changes:
                 await self.send_embed(
                     channel=channel,
-                    title=f"🔥 **{alliance_name}** Town Center Level Changes",
+                    title=f"🏰 **{alliance_name}** Town Center Level Changes",
                     description=safe_list(furnace_changes),
                     color=discord.Color.orange(),
                     footer=f"📊 Total Changes: {len(furnace_changes)}"

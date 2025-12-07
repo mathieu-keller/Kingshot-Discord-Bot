@@ -114,7 +114,7 @@ class AllianceMemberOperations(commands.Cog):
         for level_range, emoji in self.fl_emojis.items():
             if fl_level in level_range:
                 return emoji
-        return "🔥"
+        return "🏰"
 
     async def handle_member_operations(self, interaction: discord.Interaction):
         embed = discord.Embed(
@@ -639,7 +639,7 @@ class AllianceMemberOperations(commands.Cog):
                             member_list = ""
                             for idx, (fid, nickname, furnace_lv) in enumerate(chunk, start=page * members_per_page + 1):
                                 level = self.cog.level_mapping.get(furnace_lv, str(furnace_lv))
-                                member_list += f"**{idx:02d}.** 👤 {nickname}\n└ ⚔️ `TG: {level}`\n\n"
+                                member_list += f"**{idx:02d}.** 👤 {nickname}\n└ ⚔️ `TC: {level}`\n\n"
 
                             embed.description += member_list
                             
@@ -1743,7 +1743,7 @@ class MemberSelectView(discord.ui.View):
             discord.SelectOption(
                 label=f"{nickname[:50]}",
                 value=str(fid),
-                description=f"ID: {fid} | TG: {self.cog.level_mapping.get(furnace_lv, str(furnace_lv))}",
+                description=f"ID: {fid} | TC: {self.cog.level_mapping.get(furnace_lv, str(furnace_lv))}",
                 emoji="👤"
             ) for fid, nickname, furnace_lv in current_members[:remaining_slots]
         ]

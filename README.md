@@ -112,7 +112,7 @@ If you're using a previous version, **you only need to restart the bot** and acc
 
 1.  **🏰 Set up your Alliance(s):**
     * Once you access the bot menu, you'll want to create one or more Alliance(s) via `Alliance Operations` -> `Add Alliance`.
-    * `Control Interval` determines how often the bot will update names and furnace level changes. Once or twice a day should be sufficient.
+    * `Control Interval` determines how often the bot will update names and town center level changes. Once or twice a day should be sufficient.
 
 2.  **👥 Add Members to your Alliance(s):**
     * Add members manually to the alliance(s) you created via `Member Operations` -> `Add Member`.
@@ -176,7 +176,7 @@ Numerous flags are available that can be used to adjust how the bot runs. These 
 - **Notification System:** Event reminder system with flexible configuration and timing
 - **ID Channel System:** Automatic member addition via ID channels
 - **Backup System:** Encrypted database backups with personal encryption keys
-- **Alliance History:** Track nickname and furnace level changes
+- **Alliance History:** Track nickname and town center level changes
 - **Real-time Progress Tracking:** Live updates with color-coded status indicators
 
 ## 🔄 Auto-Update System

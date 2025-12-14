@@ -1239,12 +1239,17 @@ class PlayerSelectView(discord.ui.View):
                 else:
                     status = player.get('status', 'not_recorded')
                 status_emoji = self.cog._get_status_emoji(status)
+<<<<<<< HEAD
 
                 # Add checkmark for selected players
                 if fid in self.pending_selections:
                     label = f"☑️ {status_emoji} {nickname[:40]}"
                 else:
                     label = f"{status_emoji} {nickname[:40]}"
+=======
+                
+                label = f"{status_emoji} {nickname[:40]}"
+>>>>>>> 5bce7c1c856218324826eaf1b5fd9b3b75723992
                 description = f"ID: {fid} | TC: {FC_LEVEL_MAPPING.get(furnace_lv, str(furnace_lv))}"
             else:
                 # Handle tuple format with 3 or 5 elements
@@ -1270,12 +1275,17 @@ class PlayerSelectView(discord.ui.View):
                     else:
                         status = 'not_recorded'
                     status_emoji = self.cog._get_status_emoji(status)
+<<<<<<< HEAD
 
                 # Add checkmark for selected players
                 if fid in self.pending_selections:
                     label = f"☑️ {status_emoji} {nickname[:40]}"
                 else:
                     label = f"{status_emoji} {nickname[:40]}"
+=======
+                
+                label = f"{status_emoji} {nickname[:40]}"
+>>>>>>> 5bce7c1c856218324826eaf1b5fd9b3b75723992
                 description = f"ID: {fid} | TC: {FC_LEVEL_MAPPING.get(furnace_lv, str(furnace_lv))}"
                 
             options.append(discord.SelectOption(
@@ -1369,6 +1379,39 @@ class PlayerSelectView(discord.ui.View):
         if next_button:
             next_button.disabled = self.page == self.max_page
 
+<<<<<<< HEAD
+=======
+    async def show_player_attendance_options(self, interaction: discord.Interaction, player):
+        # Handle both dict and tuple formats
+        if isinstance(player, dict):
+            fid = player['fid']
+            nickname = player['nickname']
+            furnace_lv = player.get('furnace_lv', 0)
+        else:
+            # Handle tuple format - can be 3 or 5 elements
+            if len(player) >= 5:
+                fid, nickname, furnace_lv, status, points = player[:5]
+            else:
+                fid, nickname, furnace_lv = player[:3]
+        
+        # Create new view with attendance options for this player
+        attendance_view = PlayerAttendanceView(player, self)
+        
+        embed = discord.Embed(
+            title=f"📋 Mark Attendance - {nickname}",
+            description=(
+                f"**Player:** {nickname}\n"
+                f"**ID:** {fid}\n"
+                f"**TC:** {FC_LEVEL_MAPPING.get(furnace_lv, str(furnace_lv))}\n"
+                f"**Session:** {self.session_name}\n\n"
+                "Please select the attendance status for this player:"
+            ),
+            color=discord.Color.blue()
+        )
+        
+        await interaction.response.edit_message(embed=embed, view=attendance_view)
+
+>>>>>>> 5bce7c1c856218324826eaf1b5fd9b3b75723992
     @discord.ui.button(label="◀️", style=discord.ButtonStyle.secondary, row=1)
     async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.page = max(0, self.page - 1)

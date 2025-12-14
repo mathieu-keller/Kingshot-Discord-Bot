@@ -1079,8 +1079,13 @@ class GiftOperations(commands.Cog):
             self.logger.error(f"[SIGN ERROR] Response: {response_json_redeem}")
         elif msg == "STOVE_LV ERROR" and err_code == 40006:
             status = "TOO_SMALL_SPEND_MORE"
+<<<<<<< HEAD
             self.logger.error(f"[TC LVL ERROR] Town Center level is too low for ID {player_id}, code {giftcode}")
             self.logger.error(f"[TC LVL ERROR] Response: {response_json_redeem}")
+=======
+            self.logger.error(f"[FURNACE LVL ERROR] Town Center level is too low for ID {player_id}, code {giftcode}")
+            self.logger.error(f"[FURNACE LVL ERROR] Response: {response_json_redeem}")
+>>>>>>> 5bce7c1c856218324826eaf1b5fd9b3b75723992
         elif msg == "RECHARGE_MONEY ERROR" and err_code == 40017:
             status = "TOO_POOR_SPEND_MORE"
             self.logger.error(f"[VIP LEVEL ERROR] VIP level is too low for ID {player_id}, code {giftcode}")
@@ -3612,7 +3617,11 @@ class GiftOperations(commands.Cog):
                         # Define user-friendly messages for each error type
                         error_descriptions = {
                             "TOO_POOR_SPEND_MORE": "💸 **{count}** members failed to spend enough to reach VIP12.",
+<<<<<<< HEAD
                             "TOO_SMALL_SPEND_MORE": "🔥 **{count}** members failed due to insufficient Town Center level.",
+=======
+                            "TOO_SMALL_SPEND_MORE": "🏰 **{count}** members failed due to insufficient town center level.",
+>>>>>>> 5bce7c1c856218324826eaf1b5fd9b3b75723992
                             "TIMEOUT_RETRY": "⏱️ **{count}** members were staring into the void, until the void finally timed out on them.",
                             "LOGIN_EXPIRED_MID_PROCESS": "🔒 **{count}** members login failed mid-process. How'd that even happen?",
                             "LOGIN_FAILED": "🔐 **{count}** members failed due to login issues. Try logging it off and on again!",
@@ -3784,7 +3793,7 @@ class GiftOperations(commands.Cog):
                 elif response_status == "TOO_SMALL_SPEND_MORE":
                     add_to_failed = True
                     mark_processed = True
-                    fail_reason = "Furnace level too low"
+                    fail_reason = "Town Center level too low"
                     error_summary["TOO_SMALL_SPEND_MORE"] = error_summary.get("TOO_SMALL_SPEND_MORE", 0) + 1
                 else:
                     add_to_failed = True

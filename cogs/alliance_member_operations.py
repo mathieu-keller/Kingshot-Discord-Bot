@@ -116,7 +116,7 @@ class AllianceMemberOperations(commands.Cog):
         for level_range, emoji in self.fl_emojis.items():
             if fl_level in level_range:
                 return emoji
-        return "🔥"
+        return "🏰"
 
     async def handle_member_operations(self, interaction: discord.Interaction):
         embed = discord.Embed(
@@ -2579,10 +2579,11 @@ class MemberSelectView(discord.ui.View):
             options.append(discord.SelectOption(
                 label=f"{nickname[:50]}",
                 value=str(fid),
-                description=f"ID: {fid} | TC: {self.cog.level_mapping.get(furnace_lv, str(furnace_lv))}",
-                emoji="✅" if is_selected else "👤",
-                default=is_selected
-            ))
+                description=f"ID: {fid} | TG: {self.cog.level_mapping.get(furnace_lv, str(furnace_lv))}",
+                emoji="👤"
+            ) for fid, nickname, furnace_lv in current_members[:remaining_slots]
+        ]
+        options.extend(member_options)
 
         # Determine placeholder based on context (remove vs transfer)
         if self.is_remove_operation:

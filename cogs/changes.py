@@ -524,7 +524,7 @@ class HistoryView(discord.ui.View):
             view = MemberListView(self.cog, members, alliance_name)
             
             embed = discord.Embed(
-                title=f"🔥 {alliance_name} - Member List",
+                title=f"🏰 {alliance_name} - Member List",
                 description=(
                     "Select a member to view castle history:\n"
                     "━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -1232,7 +1232,7 @@ class RecentChangesView(discord.ui.View):
 
     def get_embed(self):
         embed = discord.Embed(
-            title=f"🔥 Recent Level Changes - {self.alliance_name}",
+            title=f"🏰 Recent Level Changes - {self.alliance_name}",
             description=(
                 f"Showing changes in the last {self.hours} hour(s)\n"
                 "━━━━━━━━━━━━━━━━━━━━━━\n"

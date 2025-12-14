@@ -1,13 +1,18 @@
 import discord
 from discord.ext import commands
+from discord import app_commands
 import sqlite3
 from datetime import datetime
 import os
+import re
+from io import BytesIO
 import uuid
 
 try:
     import matplotlib.pyplot as plt
     import matplotlib.font_manager as fm
+    import arabic_reshaper
+    from bidi.algorithm import get_display
     
     # Load Unifont if available
     font_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "fonts")
@@ -25,29 +30,32 @@ except ImportError:
 
 FC_LEVEL_MAPPING = {
     31: "30-1", 32: "30-2", 33: "30-3", 34: "30-4",
-    35: "FC 1", 36: "FC 1-1", 37: "FC 1-2", 38: "FC 1-3", 39: "FC 1-4",
-    40: "FC 2", 41: "FC 2-1", 42: "FC 2-2", 43: "FC 2-3", 44: "FC 2-4",
-    45: "FC 3", 46: "FC 3-1", 47: "FC 3-2", 48: "FC 3-3", 49: "FC 3-4",
-    50: "FC 4", 51: "FC 4-1", 52: "FC 4-2", 53: "FC 4-3", 54: "FC 4-4",
-    55: "FC 5", 56: "FC 5-1", 57: "FC 5-2", 58: "FC 5-3", 59: "FC 5-4",
-    60: "FC 6", 61: "FC 6-1", 62: "FC 6-2", 63: "FC 6-3", 64: "FC 6-4",
-    65: "FC 7", 66: "FC 7-1", 67: "FC 7-2", 68: "FC 7-3", 69: "FC 7-4",
-    70: "FC 8", 71: "FC 8-1", 72: "FC 8-2", 73: "FC 8-3", 74: "FC 8-4",
-    75: "FC 9", 76: "FC 9-1", 77: "FC 9-2", 78: "FC 9-3", 79: "FC 9-4",
-    80: "FC 10", 81: "FC 10-1", 82: "FC 10-2", 83: "FC 10-3", 84: "FC 10-4"
+    35: "TC 1", 36: "TC 1-1", 37: "TC 1-2", 38: "TC 1-3", 39: "TC 1-4",
+    40: "TC 2", 41: "TC 2-1", 42: "TC 2-2", 43: "TC 2-3", 44: "TC 2-4",
+    45: "TC 3", 46: "TC 3-1", 47: "TC 3-2", 48: "TC 3-3", 49: "TC 3-4",
+    50: "TC 4", 51: "TC 4-1", 52: "TC 4-2", 53: "TC 4-3", 54: "TC 4-4",
+    55: "TC 5", 56: "TC 5-1", 57: "TC 5-2", 58: "TC 5-3", 59: "TC 5-4",
+    60: "TC 6", 61: "TC 6-1", 62: "TC 6-2", 63: "TC 6-3", 64: "TC 6-4",
+    65: "TC 7", 66: "TC 7-1", 67: "TC 7-2", 68: "TC 7-3", 69: "TC 7-4",
+    70: "TC 8", 71: "TC 8-1", 72: "TC 8-2", 73: "TC 8-3", 74: "TC 8-4",
+    75: "TC 9", 76: "TC 9-1", 77: "TC 9-2", 78: "TC 9-3", 79: "TC 9-4",
+    80: "TC 10", 81: "TC 10-1", 82: "TC 10-2", 83: "TC 10-3", 84: "TC 10-4"
 }
 
-EVENT_TYPES = ["Foundry", "Canyon Clash", "Crazy Joe", "Bear Trap", "Castle Battle", "Frostdragon Tyrant", "Other"]
+EVENT_TYPES = ["Swordland Showdown", "Tri-Alliance Clash", "Viking Vengeance", "Bear Trap", "Castle Battle", "KvK Battle", "Other"]
 
 EVENT_TYPE_ICONS = {
-    "Foundry": "🏭",
-    "Canyon Clash": "⚔️",
-    "Crazy Joe": "🤪",
+    "Swordland Showdown": "⚔️",
+    "Tri-Alliance Clash": "🔱",
+    "Viking Vengeance": "🔥",
     "Bear Trap": "🐻",
     "Castle Battle": "🏰",
-    "Frostdragon Tyrant": "🐉",
+    "KvK Battle": "👑",
     "Other": "📋"
 }
+
+# Event types that support legion selection (Legion 1, Legion 2)
+LEGION_EVENT_TYPES = ["Swordland Showdown", "Tri-Alliance Clash"]
 
 def parse_points(points_str):
     try:
@@ -107,6 +115,58 @@ class AttendanceSettingsView(discord.ui.View):
             await interaction.response.edit_message(embed=error_embed, view=None)
 
     @discord.ui.button(
+        label="Sort Order",
+        emoji="🔄",
+        style=discord.ButtonStyle.primary,
+        custom_id="sort_order"
+    )
+    async def sort_order_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Configure report sort order"""
+        try:
+            # Get current setting from attendance_report cog
+            report_cog = self.cog.bot.get_cog("AttendanceReport")
+            if not report_cog:
+                await interaction.response.send_message("❌ Attendance report system not available.", ephemeral=True)
+                return
+
+            current_setting = await report_cog.get_user_sort_preference(interaction.user.id)
+
+            # Create selection view
+            select_view = ReportSortSelectView(self.cog, report_cog, current_setting)
+
+            embed = discord.Embed(
+                title="🔄 Sort Order Settings",
+                description=(
+                    f"**Current Setting:** {self._format_sort_name(current_setting)}\n\n"
+                    "**Available Options:**\n"
+                    "• **By Points** - Highest points first (Present → Absent)\n"
+                    "• **Name A-Z** - Alphabetical order (Present → Absent)\n"
+                    "• **Name A-Z (All)** - Alphabetical order (All Users)\n"
+                    "• **Last Attended First** - Most recent attendance first\n\n"
+                    "Select your preferred sort order below:"
+                ),
+                color=discord.Color.blue()
+            )
+
+            await interaction.response.edit_message(embed=embed, view=select_view)
+
+        except Exception as e:
+            error_embed = self.cog._create_error_embed(
+                "❌ Error",
+                "An error occurred while loading settings."
+            )
+            await interaction.response.edit_message(embed=error_embed, view=None)
+
+    def _format_sort_name(self, sort_type):
+        """Format sort type name for display"""
+        return {
+            "points_desc": "By Points",
+            "name_asc": "Name A-Z",
+            "name_asc_all": "Name A-Z (All)",
+            "last_attended_first": "Last Attended First"
+        }.get(sort_type, sort_type)
+
+    @discord.ui.button(
         label="⬅️ Back",
         style=discord.ButtonStyle.secondary,
         custom_id="back_to_main"
@@ -158,7 +218,9 @@ class ReportTypeSelectView(discord.ui.View):
                 "**Available Settings**\n"
                 "━━━━━━━━━━━━━━━━━━━━━━\n"
                 "📊 **Report Type**\n"
-                "└ Choose between text or visual reports\n"
+                "└ Choose between text or visual reports\n\n"
+                "🔄 **Sort Order**\n"
+                "└ Choose how to sort players in the reports\n"
                 "━━━━━━━━━━━━━━━━━━━━━━"
             ),
             color=discord.Color.blue()
@@ -185,6 +247,106 @@ class ReportTypeSelectView(discord.ui.View):
         except Exception as e:
             error_embed = self.cog._create_error_embed(
                 "❌ Error", 
+                "Failed to update settings."
+            )
+            await interaction.response.edit_message(embed=error_embed, view=None)
+
+class ReportSortSelectView(discord.ui.View):
+    def __init__(self, cog, report_cog, current_setting):
+        super().__init__(timeout=7200)
+        self.cog = cog
+        self.report_cog = report_cog
+        self.current_setting = current_setting
+
+    @discord.ui.button(
+        label="By Points",
+        emoji="💯",
+        style=discord.ButtonStyle.primary,
+        custom_id="sort_points"
+    )
+    async def points_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.set_sort_preference(interaction, "points_desc")
+
+    @discord.ui.button(
+        label="Name A-Z",
+        emoji="🔤",
+        style=discord.ButtonStyle.primary,
+        custom_id="sort_name"
+    )
+    async def name_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.set_sort_preference(interaction, "name_asc")
+
+    @discord.ui.button(
+        label="Name A-Z (All)",
+        emoji="📝",
+        style=discord.ButtonStyle.primary,
+        custom_id="sort_name_all"
+    )
+    async def name_all_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.set_sort_preference(interaction, "name_asc_all")
+
+    @discord.ui.button(
+        label="Last Attended First",
+        emoji="📅",
+        style=discord.ButtonStyle.primary,
+        custom_id="sort_last_attended"
+    )
+    async def last_attended_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.set_sort_preference(interaction, "last_attended_first")
+
+    @discord.ui.button(
+        label="⬅️ Back",
+        style=discord.ButtonStyle.secondary,
+        custom_id="back_to_settings"
+    )
+    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        settings_view = AttendanceSettingsView(self.cog)
+        embed = discord.Embed(
+            title="⚙️ Attendance Settings",
+            description=(
+                "Configure your attendance system preferences:\n\n"
+                "**Available Settings**\n"
+                "━━━━━━━━━━━━━━━━━━━━━━\n"
+                "📊 **Report Type**\n"
+                "└ Choose between text or visual reports\n\n"
+                "🔄 **Sort Order**\n"
+                "└ Choose how to sort players in the reports\n"
+                "━━━━━━━━━━━━━━━━━━━━━━"
+            ),
+            color=discord.Color.blue()
+        )
+        await interaction.response.edit_message(embed=embed, view=settings_view)
+
+    async def set_sort_preference(self, interaction: discord.Interaction, preference: str):
+        """Set user's sort preference"""
+        try:
+            success = await self.report_cog.set_user_sort_preference(interaction.user.id, preference)
+
+            if success:
+                sort_name = {
+                    "points_desc": "By Points",
+                    "name_asc": "Name A-Z",
+                    "name_asc_all": "Name A-Z (All)",
+                    "last_attended_first": "Last Attended First"
+                }.get(preference, preference)
+
+                embed = discord.Embed(
+                    title="✅ Settings Updated",
+                    description=f"Sort order has been set to: **{sort_name}**",
+                    color=discord.Color.green()
+                )
+
+                back_view = self.cog._create_back_view(
+                    lambda i: self.cog.show_attendance_menu(i)
+                )
+
+                await interaction.response.edit_message(embed=embed, view=back_view)
+            else:
+                raise Exception("Failed to save preference")
+
+        except Exception as e:
+            error_embed = self.cog._create_error_embed(
+                "❌ Error",
                 "Failed to update settings."
             )
             await interaction.response.edit_message(embed=error_embed, view=None)
@@ -317,7 +479,7 @@ class AttendanceView(discord.ui.View):
                 return
 
             settings_view = AttendanceSettingsView(self.cog)
-            
+
             embed = discord.Embed(
                 title="⚙️ Attendance Settings",
                 description=(
@@ -325,12 +487,14 @@ class AttendanceView(discord.ui.View):
                     "**Available Settings**\n"
                     "━━━━━━━━━━━━━━━━━━━━━━\n"
                     "📊 **Report Type**\n"
-                    "└ Choose between text or visual reports\n"
+                    "└ Choose between text or visual reports\n\n"
+                    "🔄 **Sort Order**\n"
+                    "└ Choose how to sort players in the reports\n"
                     "━━━━━━━━━━━━━━━━━━━━━━"
                 ),
                 color=discord.Color.blue()
             )
-            
+
             await interaction.response.edit_message(embed=embed, view=settings_view)
 
         except Exception as e:
@@ -364,33 +528,70 @@ class EventTypeSelectView(discord.ui.View):
         self.cog = cog
         self.alliance_id = alliance_id
         self.alliance_name = alliance_name
-        
-        # Add the dropdown
-        self.add_item(self.create_event_type_select())
-        
+        self.selected_event_type = None
+        self.selected_legion = None
+
+        # Add the event type dropdown
+        self.event_type_select = self.create_event_type_select()
+        self.add_item(self.event_type_select)
+
+        # Legion select (initially not added, added dynamically when needed)
+        self.legion_select = None
+
         # Add back button
-        back_button = discord.ui.Button(label="⬅️ Back", style=discord.ButtonStyle.secondary)
+        back_button = discord.ui.Button(label="⬅️ Back", style=discord.ButtonStyle.secondary, row=2)
         back_button.callback = self.back_to_sessions
         self.add_item(back_button)
-    
+
     def create_event_type_select(self):
+        options = []
+        for event_type in EVENT_TYPES:
+            emoji = EVENT_TYPE_ICONS.get(event_type, "📋")
+            is_default = event_type == "Other"
+            options.append(discord.SelectOption(label=event_type, value=event_type, emoji=emoji, default=is_default))
+
         select = discord.ui.Select(
             placeholder="🎯 Select Event Type...",
-            options=[
-                discord.SelectOption(label="Swordland Showdown", value="Swordland Showdown", emoji="⚔"),
-                discord.SelectOption(label="Viking Vengeance", value="Viking Vengeance", emoji="⚡"),
-                discord.SelectOption(label="Bear Trap", value="Bear Trap", emoji="🐻"),
-                discord.SelectOption(label="Castle Battle", value="Castle Battle", emoji="🏰"),
-                discord.SelectOption(label="KvK Battle", value="KvK Battle", emoji="👑"),
-                discord.SelectOption(label="Other", value="Other", emoji="📋", default=True)
-            ]
+            options=options,
+            row=0
         )
-        
-        async def select_callback(interaction: discord.Interaction):
-            event_type = select.values[0]
-            self.session_data['event_type'] = event_type
-            
-            # Proceed to player marking
+        select.callback = self.on_event_type_select
+        return select
+
+    def create_legion_select(self):
+        select = discord.ui.Select(
+            placeholder="🎖️ Select Legion...",
+            options=[
+                discord.SelectOption(label="Legion 1", value="Legion 1", emoji="1️⃣"),
+                discord.SelectOption(label="Legion 2", value="Legion 2", emoji="2️⃣")
+            ],
+            row=1
+        )
+        select.callback = self.on_legion_select
+        return select
+
+    async def on_event_type_select(self, interaction: discord.Interaction):
+        event_type = self.event_type_select.values[0]
+        self.selected_event_type = event_type
+        self.session_data['event_type'] = event_type
+
+        # Check if this event type requires legion selection
+        if event_type in LEGION_EVENT_TYPES:
+            # Add legion dropdown if not already present
+            if self.legion_select is None:
+                self.legion_select = self.create_legion_select()
+                self.add_item(self.legion_select)
+
+            # Update embed to prompt for legion selection
+            embed = discord.Embed(
+                title="🎖️ Select Legion",
+                description=f"**Event Type:** {EVENT_TYPE_ICONS.get(event_type, '📋')} {event_type}\n\nPlease select the legion for this attendance session:",
+                color=discord.Color.blue()
+            )
+            await interaction.response.edit_message(embed=embed, view=self)
+        else:
+            # No legion needed, proceed to player marking
+            self.selected_legion = None
             await self.cog.show_attendance_marking(
                 interaction,
                 self.alliance_id,
@@ -399,12 +600,26 @@ class EventTypeSelectView(discord.ui.View):
                 session_id=None,
                 is_edit=False,
                 event_type=event_type,
-                event_date=self.session_data.get('event_date')
+                event_date=self.session_data.get('event_date'),
+                event_subtype=None
             )
-        
-        select.callback = select_callback
-        return select
-    
+
+    async def on_legion_select(self, interaction: discord.Interaction):
+        self.selected_legion = self.legion_select.values[0]
+
+        # Proceed to player marking with legion
+        await self.cog.show_attendance_marking(
+            interaction,
+            self.alliance_id,
+            self.alliance_name,
+            self.session_data['name'],
+            session_id=None,
+            is_edit=False,
+            event_type=self.selected_event_type,
+            event_date=self.session_data.get('event_date'),
+            event_subtype=self.selected_legion
+        )
+
     async def back_to_sessions(self, interaction: discord.Interaction):
         await self.cog.show_session_selection_for_marking(interaction, self.alliance_id)
 
@@ -553,41 +768,120 @@ class AllianceSelectView(discord.ui.View):
         await self.cog.show_attendance_menu(interaction)
 
 class EditEventDetailsView(discord.ui.View):
-    def __init__(self, session_id, session_name, current_event_type, current_event_date, parent_view, is_edit=True):
+    def __init__(self, session_id, session_name, current_event_type, current_event_date, parent_view, is_edit=True, current_event_subtype=None):
         super().__init__(timeout=1800)
         self.session_id = session_id
         self.session_name = session_name
         self.current_event_type = current_event_type
         self.current_event_date = current_event_date
+        self.current_event_subtype = current_event_subtype
         self.parent_view = parent_view
         self.selected_event_type = current_event_type
+        self.selected_event_subtype = current_event_subtype
         self.new_event_date = None
         self.is_edit = is_edit
-        
-        # Create event type dropdown
+
+        # Create event type dropdown with dynamic options
+        options = []
+        for event_type in EVENT_TYPES:
+            emoji = EVENT_TYPE_ICONS.get(event_type, "📋")
+            is_default = (event_type == current_event_type) or (event_type == "Other" and not current_event_type)
+            options.append(discord.SelectOption(label=event_type, value=event_type, emoji=emoji, default=is_default))
+
         self.event_type_select = discord.ui.Select(
             placeholder=f"Event Type: {current_event_type or 'Select...'}",
-            options=[
-                discord.SelectOption(label="Swordland Showdown", value="Swordland Showdown", emoji="⚔", default=(current_event_type == "Swordland Showdown")),
-                discord.SelectOption(label="Viking Vengeance", value="Viking Vengeance", emoji="⚡", default=(current_event_type == "Viking Vengeance")),
-                discord.SelectOption(label="Bear Trap", value="Bear Trap", emoji="🐻", default=(current_event_type == "Bear Trap")),
-                discord.SelectOption(label="Castle Battle", value="Castle Battle", emoji="🏰", default=(current_event_type == "Castle Battle")),
-                discord.SelectOption(label="KvK Battle", value="KvK Battle", emoji="👑", default=(current_event_type == "KvK Battle")),
-                discord.SelectOption(label="Other", value="Other", emoji="📋", default=(current_event_type == "Other" or not current_event_type))
-            ],
+            options=options,
             row=1
         )
         self.event_type_select.callback = self.on_event_type_select
         self.add_item(self.event_type_select)
-        
+
+        # Create legion dropdown only for legion events (Foundry, Canyon Clash)
+        self.legion_select = None
+        if current_event_type in LEGION_EVENT_TYPES:
+            self._add_legion_select(current_event_subtype)
+
         # Remove delete button if not in edit mode
         if not self.is_edit:
             for item in self.children:
                 if hasattr(item, 'label') and item.label == "🗑️ Delete Event":
                     item.disabled = True
-        
+
+    def _add_legion_select(self, subtype=None):
+        """Add legion select dropdown"""
+        self.legion_select = discord.ui.Select(
+            placeholder=f"Legion: {subtype or 'Not Set'}",
+            options=[
+                discord.SelectOption(label="Not Set", value="none", emoji="➖", default=(not subtype)),
+                discord.SelectOption(label="Legion 1", value="Legion 1", emoji="1️⃣", default=(subtype == "Legion 1")),
+                discord.SelectOption(label="Legion 2", value="Legion 2", emoji="2️⃣", default=(subtype == "Legion 2"))
+            ],
+            row=2
+        )
+        self.legion_select.callback = self.on_legion_select
+        self.add_item(self.legion_select)
+
+    def _remove_legion_select(self):
+        """Remove legion select dropdown"""
+        if self.legion_select is not None:
+            self.remove_item(self.legion_select)
+            self.legion_select = None
+
+    def _rebuild_event_type_select(self):
+        """Rebuild the event type select with updated default"""
+        # Remove old select
+        self.remove_item(self.event_type_select)
+
+        # Create new options with updated default
+        options = []
+        for event_type in EVENT_TYPES:
+            emoji = EVENT_TYPE_ICONS.get(event_type, "📋")
+            is_default = (event_type == self.selected_event_type)
+            options.append(discord.SelectOption(label=event_type, value=event_type, emoji=emoji, default=is_default))
+
+        self.event_type_select = discord.ui.Select(
+            placeholder=f"Event Type: {self.selected_event_type}",
+            options=options,
+            row=1
+        )
+        self.event_type_select.callback = self.on_event_type_select
+        self.add_item(self.event_type_select)
+
+    def _rebuild_legion_select(self):
+        """Rebuild legion select to reset its state, or remove if not a legion event"""
+        # Always remove the old one first
+        self._remove_legion_select()
+
+        # Only add back if this is a legion event type
+        if self.selected_event_type in LEGION_EVENT_TYPES:
+            self._add_legion_select(self.selected_event_subtype)
+        else:
+            self.selected_event_subtype = None
+
     async def on_event_type_select(self, interaction: discord.Interaction):
         self.selected_event_type = self.event_type_select.values[0]
+
+        # Rebuild both selects to maintain consistent view state
+        self._rebuild_event_type_select()
+        self._rebuild_legion_select()
+
+        # Rebuild embed with updated event type
+        legion_display = f" [{self.selected_event_subtype[:1]}{self.selected_event_subtype[-1]}]" if self.selected_event_subtype else ""
+        embed = discord.Embed(
+            title="⚙️ Edit Event",
+            description=(
+                f"**Session:** {self.session_name}\n"
+                f"**Event Type:** {self.selected_event_type}{legion_display}\n"
+                f"**Date:** {self.current_event_date.strftime('%Y-%m-%d %H:%M UTC') if isinstance(self.current_event_date, datetime) else self.current_event_date or 'Not set'}\n\n"
+                "Select a new event type from the dropdown and/or edit the date."
+            ),
+            color=discord.Color.blue()
+        )
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def on_legion_select(self, interaction: discord.Interaction):
+        value = self.legion_select.values[0]
+        self.selected_event_subtype = value if value != "none" else None
         await interaction.response.defer()
         
     @discord.ui.button(label="✏️ Rename Session", style=discord.ButtonStyle.secondary, row=0)
@@ -600,12 +894,13 @@ class EditEventDetailsView(discord.ui.View):
         date_modal = EventDateModal(self.current_event_date, self)
         await interaction.response.send_modal(date_modal)
 
-    @discord.ui.button(label="💾 Save", style=discord.ButtonStyle.primary, row=2)
+    @discord.ui.button(label="💾 Save", style=discord.ButtonStyle.primary, row=3)
     async def save_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            # Use the selected event type
+            # Use the selected event type and subtype
             event_type = self.selected_event_type
-            
+            event_subtype = self.selected_event_subtype
+
             # Use new date if set, otherwise keep current
             event_date = self.new_event_date if self.new_event_date else self.current_event_date
             if isinstance(event_date, str):
@@ -616,33 +911,34 @@ class EditEventDetailsView(discord.ui.View):
             elif event_date is None:
                 # If no date is set, use current datetime
                 event_date = datetime.utcnow()
-            
+
             # Update the database
             with sqlite3.connect('db/attendance.sqlite') as db:
                 cursor = db.cursor()
                 cursor.execute("""
                     UPDATE attendance_records
-                    SET event_type = ?, event_date = ?
+                    SET event_type = ?, event_subtype = ?, event_date = ?
                     WHERE session_id = ?
-                """, (event_type, event_date.isoformat(), self.session_id))
+                """, (event_type, event_subtype, event_date.isoformat(), self.session_id))
                 db.commit()
-            
+
             # Update parent view and refresh
             self.parent_view.event_type = event_type
+            self.parent_view.event_subtype = event_subtype
             self.parent_view.event_date = event_date
             await self.parent_view.update_main_embed(interaction)
-            
+
         except Exception as e:
             await interaction.response.send_message(
                 f"❌ Error updating event details: {str(e)}",
                 ephemeral=True
             )
-            
-    @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger, row=2)
+
+    @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger, row=3)
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.parent_view.update_main_embed(interaction)
-    
-    @discord.ui.button(label="🗑️ Delete Event", style=discord.ButtonStyle.danger, row=3)
+
+    @discord.ui.button(label="🗑️ Delete Event", style=discord.ButtonStyle.danger, row=4)
     async def delete_event_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Only show for edit mode
         if not self.is_edit:
@@ -818,7 +1114,8 @@ class ConfirmDeleteView(discord.ui.View):
     
     @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.secondary)
     async def cancel_delete(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.parent_view.parent_view.update_main_embed(interaction)
+        # parent_view is PlayerSelectView, which has update_main_embed
+        await self.parent_view.update_main_embed(interaction)
 
 class PlayerFilterModal(discord.ui.Modal, title="Filter Players"):
     def __init__(self, parent_view):
@@ -843,7 +1140,7 @@ class PlayerFilterModal(discord.ui.Modal, title="Filter Players"):
         await self.parent_view.update_main_embed(interaction)
 
 class PlayerSelectView(discord.ui.View):
-    def __init__(self, players, alliance_name, session_name, cog, alliance_id=None, session_id=None, is_edit=False, page=0, event_type="Other", event_date=None):
+    def __init__(self, players, alliance_name, session_name, cog, alliance_id=None, session_id=None, is_edit=False, page=0, event_type="Other", event_date=None, event_subtype=None):
         super().__init__(timeout=7200)
         self.players = players
         self.alliance_name = alliance_name
@@ -854,6 +1151,7 @@ class PlayerSelectView(discord.ui.View):
         self.is_edit = is_edit
         self.event_type = event_type
         self.event_date = event_date
+        self.event_subtype = event_subtype
         self.selected_players = {}
         
         # Pre-populate selected_players if in edit mode
@@ -866,7 +1164,7 @@ class PlayerSelectView(discord.ui.View):
                             'nickname': nickname,
                             'attendance_type': status,
                             'points': points,
-                            'last_event_attendance': 'N/A'  # This will be fetched if needed
+                            'last_event_attendance': None  # This will be fetched if needed
                         }
         
         self.page = page
@@ -876,10 +1174,14 @@ class PlayerSelectView(discord.ui.View):
         # Filter-related attributes
         self.filter_text = ""
         self.filtered_players = self.players.copy()
-        
+
+        # Selection tracking
+        self.pending_selections = set()  # Store FIDs of selected players
+
         self.update_select_menu()
         self.update_clear_button_visibility()
-
+        self.update_action_buttons()
+        
     def apply_filter(self):
         """Apply the filter to the players list"""
         if not self.filter_text:
@@ -937,9 +1239,13 @@ class PlayerSelectView(discord.ui.View):
                 else:
                     status = player.get('status', 'not_recorded')
                 status_emoji = self.cog._get_status_emoji(status)
-                
-                label = f"{status_emoji} {nickname[:40]}"
-                description = f"ID: {fid} | FC: {FC_LEVEL_MAPPING.get(furnace_lv, str(furnace_lv))}"
+
+                # Add checkmark for selected players
+                if fid in self.pending_selections:
+                    label = f"☑️ {status_emoji} {nickname[:40]}"
+                else:
+                    label = f"{status_emoji} {nickname[:40]}"
+                description = f"ID: {fid} | TC: {FC_LEVEL_MAPPING.get(furnace_lv, str(furnace_lv))}"
             else:
                 # Handle tuple format with 3 or 5 elements
                 if len(player) == 3:
@@ -964,15 +1270,20 @@ class PlayerSelectView(discord.ui.View):
                     else:
                         status = 'not_recorded'
                     status_emoji = self.cog._get_status_emoji(status)
-                
-                label = f"{status_emoji} {nickname[:40]}"
-                description = f"ID: {fid} | FC: {FC_LEVEL_MAPPING.get(furnace_lv, str(furnace_lv))}"
+
+                # Add checkmark for selected players
+                if fid in self.pending_selections:
+                    label = f"☑️ {status_emoji} {nickname[:40]}"
+                else:
+                    label = f"{status_emoji} {nickname[:40]}"
+                description = f"ID: {fid} | TC: {FC_LEVEL_MAPPING.get(furnace_lv, str(furnace_lv))}"
                 
             options.append(discord.SelectOption(
                 label=label,
                 value=str(fid),
                 description=description[:100],
-                emoji="👤"
+                emoji="👤",
+                default=(fid in self.pending_selections)
             ))
         
         # Update placeholder to show filter status
@@ -989,51 +1300,54 @@ class PlayerSelectView(discord.ui.View):
             else:
                 placeholder = f"👥 Filtered: '{self.filter_text}' - {len(self.filtered_players)} results (Page {self.page + 1}/{self.max_page + 1})"
         else:
-            placeholder = f"👥 Select a player to mark attendance... (Page {self.page + 1}/{self.max_page + 1})"
-        
+            placeholder = f"👥 Select players to mark attendance (Page {self.page + 1}/{self.max_page + 1})"
+
+        # Always use multi-select
+        max_vals = min(len(options), 25)
         select = discord.ui.Select(
             placeholder=placeholder,
-            options=options
+            options=options,
+            max_values=max_vals,
+            min_values=0
         )
-        
+
         async def select_callback(interaction: discord.Interaction):
             try:
                 self.current_select = select
-                
-                # Check if this is the "no results" option
-                if select.values[0] == "none":
+
+                # Handle selection with "none" option
+                if len(select.values) > 0 and select.values[0] == "none":
                     await interaction.response.send_message(
                         "No players found with the current filter. Use the Clear button to remove the filter.",
                         ephemeral=True
                     )
                     return
-                
-                selected_fid = int(select.values[0])
-                
-                # Find the selected player with proper error handling
-                selected_player = None
-                
-                # Check if we have players and determine format
-                if self.players:
-                    if isinstance(self.players[0], dict):
-                        selected_player = next((p for p in self.players if p['fid'] == selected_fid), None)
+
+                # Get FIDs on current page
+                current_page_fids = set()
+                for player in current_players:
+                    if isinstance(player, dict):
+                        current_page_fids.add(player['fid'])
                     else:
-                        selected_player = next((p for p in self.players if p[0] == selected_fid), None)
-                
-                if selected_player:
-                    await self.show_player_attendance_options(interaction, selected_player)
-                else:
-                    # Handle the case where player is not found
-                    error_embed = discord.Embed(
-                        title="❌ Error",
-                        description="Player not found. Please try again.",
-                        color=discord.Color.red()
-                    )
-                    await interaction.response.edit_message(embed=error_embed, view=self)
+                        current_page_fids.add(player[0])
+
+                # Remove selections from current page
+                self.pending_selections -= current_page_fids
+
+                # Add new selections from dropdown
+                for val in select.values:
+                    if val != "none":
+                        self.pending_selections.add(int(val))
+
+                # Update UI
+                self.update_select_menu()
+                self.update_action_buttons()
+                await self.update_main_embed(interaction)
+
             except Exception as e:
                 error_embed = discord.Embed(
                     title="❌ Error",
-                    description="An error occurred while selecting the player. Please try again.",
+                    description="An error occurred while selecting players. Please try again.",
                     color=discord.Color.red()
                 )
                 try:
@@ -1054,36 +1368,6 @@ class PlayerSelectView(discord.ui.View):
             prev_button.disabled = self.page == 0
         if next_button:
             next_button.disabled = self.page == self.max_page
-
-    async def show_player_attendance_options(self, interaction: discord.Interaction, player):
-        # Handle both dict and tuple formats
-        if isinstance(player, dict):
-            fid = player['fid']
-            nickname = player['nickname']
-            furnace_lv = player.get('furnace_lv', 0)
-        else:
-            # Handle tuple format - can be 3 or 5 elements
-            if len(player) >= 5:
-                fid, nickname, furnace_lv, status, points = player[:5]
-            else:
-                fid, nickname, furnace_lv = player[:3]
-        
-        # Create new view with attendance options for this player
-        attendance_view = PlayerAttendanceView(player, self)
-        
-        embed = discord.Embed(
-            title=f"📋 Mark Attendance - {nickname}",
-            description=(
-                f"**Player:** {nickname}\n"
-                f"**ID:** {fid}\n"
-                f"**FC:** {FC_LEVEL_MAPPING.get(furnace_lv, str(furnace_lv))}\n"
-                f"**Session:** {self.session_name}\n\n"
-                "Please select the attendance status for this player:"
-            ),
-            color=discord.Color.blue()
-        )
-        
-        await interaction.response.edit_message(embed=embed, view=attendance_view)
 
     @discord.ui.button(label="◀️", style=discord.ButtonStyle.secondary, row=1)
     async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1114,20 +1398,48 @@ class PlayerSelectView(discord.ui.View):
     @discord.ui.button(label="⚙️ Edit Event", style=discord.ButtonStyle.secondary, row=1)
     async def edit_event_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Show view to edit event type and date
-        view = EditEventDetailsView(self.session_id, self.session_name, self.event_type, self.event_date, self, is_edit=self.is_edit)
+        view = EditEventDetailsView(self.session_id, self.session_name, self.event_type, self.event_date, self, is_edit=self.is_edit, current_event_subtype=self.event_subtype)
+        legion_display = f" [{self.event_subtype[:1]}{self.event_subtype[-1]}]" if self.event_subtype else ""
         embed = discord.Embed(
             title="⚙️ Edit Event",
             description=(
                 f"**Session:** {self.session_name}\n"
-                f"**Current Event Type:** {self.event_type}\n"
-                f"**Current Date:** {self.event_date.strftime('%Y-%m-%d %H:%M UTC') if isinstance(self.event_date, datetime) else self.event_date or 'Not set'}\n\n"
+                f"**Event Type:** {self.event_type}{legion_display}\n"
+                f"**Date:** {self.event_date.strftime('%Y-%m-%d %H:%M UTC') if isinstance(self.event_date, datetime) else self.event_date or 'Not set'}\n\n"
                 "Select a new event type from the dropdown and/or edit the date."
             ),
             color=discord.Color.blue()
         )
         await interaction.response.edit_message(embed=embed, view=view)
 
-    @discord.ui.button(label="📊 View Summary", style=discord.ButtonStyle.primary, row=2)
+    @discord.ui.button(label="Present", emoji="✅", style=discord.ButtonStyle.success, row=2, disabled=True)
+    async def mark_present(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Mark all selected players as present"""
+        if not self.pending_selections:
+            await interaction.response.send_message("No players selected", ephemeral=True)
+            return
+
+        modal = BulkAttendanceModal(self.pending_selections, "present", self)
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="Absent", emoji="❌", style=discord.ButtonStyle.danger, row=2, disabled=True)
+    async def mark_absent(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Mark all selected players as absent"""
+        if not self.pending_selections:
+            await interaction.response.send_message("No players selected", ephemeral=True)
+            return
+
+        await self.bulk_mark_attendance(interaction, "absent", 0)
+
+    @discord.ui.button(label="Clear", emoji="🗑️", style=discord.ButtonStyle.secondary, row=2, disabled=True)
+    async def clear_selection(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Clear all selected players"""
+        self.pending_selections.clear()
+        self.update_select_menu()
+        self.update_action_buttons()
+        await self.update_main_embed(interaction)
+
+    @discord.ui.button(label="📊 View Summary", style=discord.ButtonStyle.primary, row=3)
     async def view_summary_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.selected_players:
             # Show error in the same message
@@ -1143,13 +1455,13 @@ class PlayerSelectView(discord.ui.View):
             )
             back_button.callback = lambda i: self.update_main_embed(i)
             back_view.add_item(back_button)
-            
+
             await interaction.response.edit_message(embed=error_embed, view=back_view)
             return
-        
+
         await self.show_summary(interaction)
 
-    @discord.ui.button(label="✅ Finish Attendance", style=discord.ButtonStyle.success, row=2)
+    @discord.ui.button(label="✅ Finish Attendance", style=discord.ButtonStyle.success, row=3)
     async def finish_attendance_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             if not self.selected_players:
@@ -1165,22 +1477,23 @@ class PlayerSelectView(discord.ui.View):
                 )
                 back_button.callback = lambda i: self.update_main_embed(i)
                 back_view.add_item(back_button)
-                
+
                 await interaction.response.edit_message(embed=error_embed, view=back_view)
                 return
-            
+
             await interaction.response.defer()
             await self.cog.process_attendance_results(
-                interaction, 
-                self.selected_players, 
-                self.alliance_name, 
-                self.session_name, 
+                interaction,
+                self.selected_players,
+                self.alliance_name,
+                self.session_name,
                 use_defer=True,
                 session_id=self.session_id,
                 is_edit=self.is_edit,
                 event_type=self.event_type,
                 event_date=self.event_date,
-                alliance_id=self.alliance_id
+                alliance_id=self.alliance_id,
+                event_subtype=self.event_subtype
             )
         except Exception as e:
             import traceback
@@ -1191,31 +1504,45 @@ class PlayerSelectView(discord.ui.View):
                 view=None
             )
 
-    @discord.ui.button(label="⬅️ Back", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="⬅️ Back", style=discord.ButtonStyle.secondary, row=3)
     async def back_to_alliance_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_attendance_menu(interaction)
+    
+    def update_action_buttons(self):
+        """Update visibility and state of action buttons based on selections"""
+        has_selections = len(self.pending_selections) > 0
+
+        # Find and update the action buttons
+        for item in self.children:
+            if hasattr(item, 'label') and hasattr(item, 'row') and item.row == 2:
+                if item.label in ["Present", "Absent", "Clear"]:
+                    item.disabled = not has_selections
 
     async def update_main_embed(self, interaction: discord.Interaction):
-        marked_count = sum(1 for p in self.selected_players.values() 
+        marked_count = sum(1 for p in self.selected_players.values()
                           if p['attendance_type'] in ['present', 'absent'])
         total_count = len(self.players)
-        
+
         # Build description with filter info
         description_parts = [
             f"**Session:** {self.session_name}",
             f"**Progress:** {marked_count}/{total_count} players marked",
             f"**Current Page:** {self.page + 1}/{self.max_page + 1}"
         ]
-        
+
         if self.filter_text:
             description_parts.append(f"**Filter Active:** '{self.filter_text}' ({len(self.filtered_players)} results)")
-        
+
+        # Add selection status
+        if self.pending_selections:
+            description_parts.append(f"**🔹 Selected:** {len(self.pending_selections)} players")
+
         description_parts.extend([
             "",
-            "Select a player from the dropdown to mark their attendance.",
-            "Use the buttons below to navigate, view summary, or finish."
+            "Select players across pages using the dropdown. Selected players show ☑️.",
+            "Use Present/Absent to mark attendance or Clear to deselect all."
         ])
-        
+
         embed = discord.Embed(
             title=f"📋 Marking Attendance - {self.alliance_name}",
             description="\n".join(description_parts),
@@ -1264,7 +1591,6 @@ class PlayerSelectView(discord.ui.View):
                     ephemeral=True
                 )
 
-
     def add_player_attendance(self, fid, nickname, attendance_type, points, last_event_attendance):
         self.selected_players[fid] = {
             'nickname': nickname,
@@ -1272,6 +1598,155 @@ class PlayerSelectView(discord.ui.View):
             'points': points,
             'last_event_attendance': last_event_attendance
         }
+    
+    async def bulk_mark_attendance(self, interaction: discord.Interaction, attendance_type: str, points: int):
+        """Mark multiple selected players with the same attendance status"""
+        try:
+            await interaction.response.defer()
+            
+            # Get player details for all selected FIDs
+            players_to_mark = []
+            for fid in self.pending_selections:
+                # Find player in the main list
+                player_data = None
+                if isinstance(self.players[0], dict):
+                    player_data = next((p for p in self.players if p['fid'] == fid), None)
+                else:
+                    player_data = next((p for p in self.players if p[0] == fid), None)
+                
+                if player_data:
+                    if isinstance(player_data, dict):
+                        nickname = player_data['nickname']
+                    else:
+                        nickname = player_data[1] if len(player_data) > 1 else "Unknown"
+                    
+                    players_to_mark.append((fid, nickname))
+                    
+                    # Add to selected_players
+                    self.selected_players[fid] = {
+                        'nickname': nickname,
+                        'attendance_type': attendance_type,
+                        'points': points,
+                        'last_event_attendance': None
+                    }
+            
+            # Clear the pending selections
+            self.pending_selections.clear()
+
+            # Update the UI
+            self.update_select_menu()
+            self.update_action_buttons()
+
+            # Prepare success info for the main embed
+            status_display = "Present" if attendance_type == "present" else "Absent"
+            
+            # Update the main view with success message
+            await self.update_main_embed_from_deferred(
+                interaction, 
+                bulk_marked_count=len(players_to_mark),
+                bulk_marked_status=status_display,
+                bulk_marked_points=points if attendance_type == "present" else None
+            )
+            
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            await interaction.followup.send(
+                f"❌ An error occurred while marking bulk attendance: {str(e)}",
+                ephemeral=True
+            )
+    
+    async def update_main_embed_from_deferred(self, interaction: discord.Interaction, 
+                                               bulk_marked_count=None, bulk_marked_status=None, bulk_marked_points=None):
+        """Update main embed after a deferred interaction"""
+        marked_count = sum(1 for p in self.selected_players.values() 
+                          if p['attendance_type'] in ['present', 'absent'])
+        total_count = len(self.players)
+        
+        # Build description with filter info
+        description_parts = [
+            f"**Session:** {self.session_name}",
+            f"**Progress:** {marked_count}/{total_count} players marked",
+            f"**Current Page:** {self.page + 1}/{self.max_page + 1}"
+        ]
+        
+        # Add bulk marking success message if provided
+        if bulk_marked_count and bulk_marked_status:
+            success_msg = f"✅ **{bulk_marked_count} players** marked as **{bulk_marked_status}**"
+            if bulk_marked_points is not None:
+                success_msg += f" with **{bulk_marked_points:,} points**"
+            description_parts.append("")
+            description_parts.append(success_msg)
+        
+        if self.filter_text:
+            description_parts.append(f"**Filter Active:** '{self.filter_text}' ({len(self.filtered_players)} results)")
+
+        # Add selection status
+        if self.pending_selections:
+            description_parts.append(f"**🔹 Selected:** {len(self.pending_selections)} players")
+
+        description_parts.extend([
+            "",
+            "Select players across pages using the dropdown. Selected players show ☑️.",
+            "Use Present/Absent to mark attendance or Clear to deselect all."
+        ])
+
+        embed = discord.Embed(
+            title=f"📋 Marking Attendance - {self.alliance_name}",
+            description="\n".join(description_parts),
+            color=discord.Color.blue()
+        )
+
+        if total_count > 0:
+            present = sum(1 for p in self.selected_players.values() if p['attendance_type'] == 'present')
+            absent = sum(1 for p in self.selected_players.values() if p['attendance_type'] == 'absent')
+            not_recorded = total_count - present - absent
+
+            embed.add_field(
+                name="📊 Current Stats",
+                value=f"Present: {present}\nAbsent: {absent}\nNot Recorded: {not_recorded}",
+                inline=True
+            )
+
+        await interaction.edit_original_response(embed=embed, view=self, attachments=[])
+
+class BulkAttendanceModal(discord.ui.Modal):
+    def __init__(self, fid_set, attendance_type, parent_view):
+        player_count = len(fid_set)
+        super().__init__(title=f"Mark {player_count} Players as Present")
+        self.fid_set = fid_set
+        self.attendance_type = attendance_type
+        self.parent_view = parent_view
+        
+        self.points_input = discord.ui.TextInput(
+            label="Points for all selected players",
+            placeholder="Enter points (e.g., 100, 4.3K, 2.5M), default is 0",
+            required=False,
+            max_length=15
+        )
+        self.add_item(self.points_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            # Parse points
+            points = 0
+            points_value = self.points_input.value.strip()
+            if points_value:
+                points = parse_points(points_value)
+            
+            # Call bulk marking method
+            await self.parent_view.bulk_mark_attendance(interaction, self.attendance_type, points)
+            
+        except ValueError as e:
+            await interaction.response.send_message(
+                f"❌ Invalid points format: {str(e)}",
+                ephemeral=True
+            )
+        except Exception as e:
+            await interaction.response.send_message(
+                f"❌ An error occurred: {str(e)}",
+                ephemeral=True
+            )
 
 class AttendanceModal(discord.ui.Modal):
     def __init__(self, fid, nickname, attendance_type, parent_view, last_attendance):
@@ -1287,7 +1762,7 @@ class AttendanceModal(discord.ui.Modal):
             self.points_input = discord.ui.TextInput(
                 label="Points",
                 placeholder="Enter points (e.g., 100, 4.3K, 2.5M), default is 0",
-                required=False, # Default to 0
+                required=False, # Not mandatory anymore, default to 0
                 max_length=15
             )
             self.add_item(self.points_input)
@@ -1408,16 +1883,29 @@ class PlayerAttendanceView(discord.ui.View):
                 # Check which schema we have
                 cursor.execute("PRAGMA table_info(attendance_records)")
                 columns = {col[1] for col in cursor.fetchall()}
-                
+
                 if 'player_id' in columns:
                     # New schema - filter by event type and exclude current session
-                    cursor.execute(
-                        "SELECT status, event_date FROM attendance_records "
-                        "WHERE player_id = ? AND event_type = ? "
-                        "AND event_date < ? AND session_id != ? "
-                        "ORDER BY event_date DESC LIMIT 1",
-                        (str(fid), self.event_type, self.parent_view.event_date, self.parent_view.session_id)
-                    )
+                    event_subtype = getattr(self.parent_view, 'event_subtype', None)
+
+                    if event_subtype:
+                        # Filter by both event_type and event_subtype (legion)
+                        cursor.execute(
+                            "SELECT status, event_date FROM attendance_records "
+                            "WHERE player_id = ? AND event_type = ? AND event_subtype = ? "
+                            "AND event_date < ? AND session_id != ? "
+                            "ORDER BY event_date DESC LIMIT 1",
+                            (str(fid), self.event_type, event_subtype, self.parent_view.event_date, self.parent_view.session_id)
+                        )
+                    else:
+                        # No subtype - filter by event_type only, matching NULL subtypes
+                        cursor.execute(
+                            "SELECT status, event_date FROM attendance_records "
+                            "WHERE player_id = ? AND event_type = ? AND event_subtype IS NULL "
+                            "AND event_date < ? AND session_id != ? "
+                            "ORDER BY event_date DESC LIMIT 1",
+                            (str(fid), self.event_type, self.parent_view.event_date, self.parent_view.session_id)
+                        )
                 else:
                     # Old schema
                     cursor.execute(
@@ -1438,7 +1926,7 @@ class PlayerAttendanceView(discord.ui.View):
                             formatted_date = date_str[:10]
                     except:
                         formatted_date = date_str[:10] if len(date_str) >= 10 else date_str
-                    
+
                     status_display = status.replace('_', ' ').title() if status else status
                     return f"{status_display} ({formatted_date})"
                 else:
@@ -1609,6 +2097,61 @@ class Attendance(commands.Cog):
             result = cursor.fetchone()
             return result[0] if result else "Unknown Alliance"
 
+    async def _handle_permission_check(self, interaction):
+        """Check admin permissions and get alliances for the user."""
+        user_id = interaction.user.id
+        guild_id = interaction.guild_id
+
+        admin_result = await self._check_admin_permissions(user_id)
+        if not admin_result:
+            error_embed = self._create_error_embed(
+                "❌ Access Denied",
+                "You do not have permission to use this command."
+            )
+            back_view = self._create_back_view(lambda i: self.show_attendance_menu(i))
+            await interaction.response.edit_message(embed=error_embed, view=back_view)
+            return None
+
+        alliances, _, _ = await self.get_admin_alliances(user_id, guild_id)
+        if not alliances:
+            error_embed = self._create_error_embed(
+                "❌ No Alliances Found",
+                "No alliances found for your permissions."
+            )
+            back_view = self._create_back_view(lambda i: self.show_attendance_menu(i))
+            await interaction.response.edit_message(embed=error_embed, view=back_view)
+            return None
+
+        return alliances, admin_result[0]
+
+    def _get_alliances_with_counts(self, alliances):
+        """Get alliance member counts with optimized single query"""
+        alliance_ids = [aid for aid, _ in alliances]
+        alliances_with_counts = []
+
+        # Validate that all alliance IDs are integers to prevent SQL injection
+        if alliance_ids and not all(isinstance(aid, int) for aid in alliance_ids):
+            raise ValueError("Invalid alliance IDs detected - all IDs must be integers")
+
+        if alliance_ids:
+            with sqlite3.connect('db/users.sqlite') as db:
+                cursor = db.cursor()
+                placeholders = ','.join('?' * len(alliance_ids))
+                cursor.execute(f"""
+                    SELECT alliance, COUNT(*)
+                    FROM users
+                    WHERE alliance IN ({placeholders})
+                    GROUP BY alliance
+                """, [str(aid) for aid in alliance_ids])
+                counts = dict(cursor.fetchall())
+
+            alliances_with_counts = [
+                (aid, name, counts.get(str(aid), 0))
+                for aid, name in alliances
+            ]
+
+        return alliances_with_counts
+
     async def get_user_report_preference(self, user_id):
         """Get user's report preference"""
         try:
@@ -1676,14 +2219,30 @@ class Attendance(commands.Cog):
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_attendance_player ON attendance_records(player_id)")
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_attendance_event_type ON attendance_records(event_type)")
 
+                # Migration: Add event_subtype column for legion tracking (Legion 1, Legion 2), NULL is unset
+                try:
+                    cursor.execute("SELECT event_subtype FROM attendance_records LIMIT 1")
+                except sqlite3.OperationalError:
+                    cursor.execute("ALTER TABLE attendance_records ADD COLUMN event_subtype TEXT DEFAULT NULL")
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_attendance_event_subtype ON attendance_records(event_subtype)")
+
                 # Create user preferences table
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS user_preferences (
                         user_id INTEGER PRIMARY KEY,
-                        report_type TEXT DEFAULT 'text'
+                        report_type TEXT DEFAULT 'text',
+                        sort_preference TEXT DEFAULT 'points_desc'
                     )
                 """)
-                
+
+                # Migration: Add sort_preference column if it doesn't exist
+                try:
+                    cursor.execute("SELECT sort_preference FROM user_preferences LIMIT 1")
+                except sqlite3.OperationalError:
+                    # Column doesn't exist, add it
+                    cursor.execute("ALTER TABLE user_preferences ADD COLUMN sort_preference TEXT DEFAULT 'points_desc'")
+                    print("Added sort_preference column to user_preferences table")
+
                 attendance_db.commit()
                 
         except Exception as e:
@@ -1899,10 +2458,11 @@ class Attendance(commands.Cog):
             with sqlite3.connect('db/attendance.sqlite') as db:
                 cursor = db.cursor()
                 cursor.execute("""
-                    SELECT 
+                    SELECT
                         session_id,
                         session_name,
                         event_type,
+                        event_subtype,
                         MIN(event_date) as session_date,
                         COUNT(DISTINCT player_id) as player_count,
                         SUM(CASE WHEN status != 'not_recorded' THEN 1 ELSE 0 END) as marked_count
@@ -1912,16 +2472,17 @@ class Attendance(commands.Cog):
                     ORDER BY session_date DESC
                 """, (str(alliance_id),))
                 raw_sessions = cursor.fetchall()
-                
+
                 # Convert tuples to dictionaries for SessionSelectView
                 sessions = [
                     {
                         'session_id': row[0],
                         'name': row[1],
                         'event_type': row[2],
-                        'date': row[3].split('T')[0] if row[3] else "Unknown",
-                        'player_count': row[4],
-                        'marked_count': row[5]
+                        'event_subtype': row[3],
+                        'date': row[4].split('T')[0] if row[4] else "Unknown",
+                        'player_count': row[5],
+                        'marked_count': row[6]
                     }
                     for row in raw_sessions
                 ]
@@ -1957,7 +2518,7 @@ class Attendance(commands.Cog):
             )
             await interaction.response.edit_message(embed=error_embed, view=None)
 
-    async def show_attendance_marking(self, interaction: discord.Interaction, alliance_id: int, alliance_name: str, session_name: str, session_id: int = None, is_edit: bool = False, event_type: str = "Other", event_date: datetime = None):
+    async def show_attendance_marking(self, interaction: discord.Interaction, alliance_id: int, alliance_name: str, session_name: str, session_id: int = None, is_edit: bool = False, event_type: str = "Other", event_date: datetime = None, event_subtype: str = None):
         """Show attendance marking interface with status display"""
         try:
             # Get all alliance members
@@ -2028,11 +2589,12 @@ class Attendance(commands.Cog):
             not_recorded_count = sum(1 for p in players if p[3] == 'not_recorded')
             
             event_icon = EVENT_TYPE_ICONS.get(event_type, "📋")
+            legion_display = f" [{event_subtype[:1]}{event_subtype[-1]}]" if event_subtype else ""
             embed = discord.Embed(
                 title=f"📋 Mark Attendance - {alliance_name}",
                 description=(
                     f"**Session:** {session_name}\n"
-                    f"**Event Type:** {event_icon} {event_type}\n"
+                    f"**Event Type:** {event_icon} {event_type}{legion_display}\n"
                     f"**Mode:** {'Edit Existing' if is_edit else 'New Session'}\n"
                     f"**Total Members:** {len(players)}\n"
                     f"**Status:** ✅ Present: {present_count} | ❌ Absent: {absent_count} | ❓ Not Recorded: {not_recorded_count}\n\n"
@@ -2040,8 +2602,8 @@ class Attendance(commands.Cog):
                 ),
                 color=discord.Color.blue()
             )
-            
-            view = PlayerSelectView(players, alliance_name, session_name, self, alliance_id, session_id, is_edit, event_type=event_type, event_date=event_date)
+
+            view = PlayerSelectView(players, alliance_name, session_name, self, alliance_id, session_id, is_edit, event_type=event_type, event_date=event_date, event_subtype=event_subtype)
             
             if interaction.response.is_done():
                 await interaction.edit_original_response(embed=embed, view=view)
@@ -2055,7 +2617,7 @@ class Attendance(commands.Cog):
             )
             await interaction.response.edit_message(embed=error_embed, view=None)
 
-    async def process_attendance_results(self, interaction: discord.Interaction, selected_players: dict, alliance_name: str, session_name: str, use_defer: bool = True, session_id: int = None, is_edit: bool = False, event_type: str = "Other", event_date: datetime = None, alliance_id: int = None):
+    async def process_attendance_results(self, interaction: discord.Interaction, selected_players: dict, alliance_name: str, session_name: str, use_defer: bool = True, session_id: int = None, is_edit: bool = False, event_type: str = "Other", event_date: datetime = None, alliance_id: int = None, event_subtype: str = None):
         """Process and display final attendance results"""
         try:
             # Count attendance types
@@ -2089,18 +2651,18 @@ class Attendance(commands.Cog):
                     for member in all_members:
                         member_fid, member_nickname, member_furnace_lv = member
                         cursor.execute("""
-                            INSERT INTO attendance_records 
+                            INSERT INTO attendance_records
                             (player_id, player_name, session_id, session_name, alliance_id, alliance_name,
-                             status, points, event_type, event_date, 
+                             status, points, event_type, event_subtype, event_date,
                              marked_at, marked_by, marked_by_username)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """, (
-                            str(member_fid), member_nickname, session_id, session_name, 
+                            str(member_fid), member_nickname, session_id, session_name,
                             str(alliance_id), alliance_name,
-                            'not_recorded', 0, 
-                            event_type, 
+                            'not_recorded', 0,
+                            event_type, event_subtype,
                             event_date.isoformat() if event_date else datetime.utcnow().isoformat(),
-                            datetime.utcnow().isoformat(), 
+                            datetime.utcnow().isoformat(),
                             str(interaction.user.id), interaction.user.name
                         ))
                 
@@ -2234,8 +2796,10 @@ class SessionSelectView(discord.ui.View):
             options = []
             for session in sessions[:25]:  # Discord limit
                 event_icon = EVENT_TYPE_ICONS.get(session.get('event_type', 'Other'), '📋')
+                event_subtype = session.get('event_subtype')
+                legion_suffix = f" [L{event_subtype[-1]}]" if event_subtype else ""
                 options.append(discord.SelectOption(
-                    label=f"{session['name'][:90]} [{session.get('event_type', 'Other')}]",
+                    label=f"{session['name'][:85]}{legion_suffix} [{session.get('event_type', 'Other')}]",
                     value=str(session['session_id']),
                     description=f"{session.get('date', 'Unknown date')} - {session.get('marked_count', 0)}/{session.get('player_count', 0)} marked",
                     emoji=event_icon
@@ -2310,12 +2874,14 @@ class SessionSelectView(discord.ui.View):
                 else:
                     # For marking mode, show attendance marking
                     await self.cog.show_attendance_marking(
-                        interaction, 
-                        self.alliance_id, 
+                        interaction,
+                        self.alliance_id,
                         await self.cog._get_alliance_name(self.alliance_id),
-                        selected_session['name'], 
+                        selected_session['name'],
                         session_id=session_id,
-                        is_edit=True
+                        is_edit=True,
+                        event_type=selected_session.get('event_type', 'Other'),
+                        event_subtype=selected_session.get('event_subtype')
                     )
             else:
                 await interaction.edit_original_response(

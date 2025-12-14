@@ -253,44 +253,124 @@ class GiftCodeAPI:
                                             gift_operations = self.bot.get_cog('GiftOperations')
                                             if gift_operations:
                                                 is_valid, validation_msg = await gift_operations.validate_gift_code_immediately(code, "api")
-                                                
+
+                                                if is_valid is None:
+                                                    self.logger.warning(f"API code '{code}' validation inconclusive on first attempt: {validation_msg}. Retrying...")
+
+                                                    for retry_num in range(1, 4):
+                                                        await asyncio.sleep(5)
+                                                        self.logger.info(f"Retry {retry_num}/3 for code '{code}'")
+                                                        is_valid, validation_msg = await gift_operations.validate_gift_code_immediately(code, "api")
+
+                                                        if is_valid is not None:
+                                                            break
+
+                                                    if is_valid is None:
+                                                        self.logger.warning(f"API code '{code}' still inconclusive after 3 retries. Marking as pending.")
+
                                                 if is_valid:
                                                     valid_codes_count += 1
                                                     self.logger.info(f"API code '{code}' validated successfully")
-                                                    # Check for auto-use
-                                                    self.cursor.execute("SELECT alliance_id FROM giftcodecontrol WHERE status = 1")
-                                                    auto_alliances = self.cursor.fetchall() or []
-                                                    validation_status = "✅ Validated"
+
+                                                    # Check if this code was previously invalid (reactivation detection)
+                                                    is_reactivated = False
+                                                    cleared_redemptions = 0
+
+                                                    try:
+                                                        self.cursor.execute(
+                                                            "SELECT validation_status FROM gift_codes WHERE giftcode = ?",
+                                                            (code,)
+                                                        )
+                                                        previous_status_row = self.cursor.fetchone()
+
+                                                        if previous_status_row and previous_status_row[0] == 'invalid':
+                                                            # This is a REACTIVATED code - clear all user redemption history
+                                                            self.logger.info(f"🔄 REACTIVATION DETECTED: Code '{code}' was invalid, now valid again")
+
+                                                            # Count existing redemptions before clearing
+                                                            self.cursor.execute(
+                                                                "SELECT COUNT(*) FROM user_giftcodes WHERE giftcode = ?",
+                                                                (code,)
+                                                            )
+                                                            count_row = self.cursor.fetchone()
+                                                            cleared_redemptions = count_row[0] if count_row else 0
+
+                                                            # Clear all user redemption records for this code
+                                                            self.cursor.execute(
+                                                                "DELETE FROM user_giftcodes WHERE giftcode = ?",
+                                                                (code,)
+                                                            )
+                                                            await self._safe_commit(self.conn, f"clear redemption history for reactivated code {code}")
+
+                                                            self.logger.info(f"✅ Cleared {cleared_redemptions} redemption records for reactivated code '{code}'")
+                                                            is_reactivated = True
+
+                                                    except Exception as e:
+                                                        self.logger.error(f"Error checking/clearing reactivation status for code '{code}': {e}")
+
+                                                    # Set validation status message
+                                                    if is_reactivated:
+                                                        validation_status = f"✅ Validated (🔄 REACTIVATED - {cleared_redemptions} redemptions cleared)"
+                                                    else:
+                                                        validation_status = "✅ Validated"
+
+                                                    try:
+                                                        await self._execute_with_retry(
+                                                            lambda: self.cursor.execute("SELECT alliance_id FROM giftcodecontrol WHERE status = 1 ORDER BY priority ASC, alliance_id ASC")
+                                                        )
+                                                        auto_alliances = self.cursor.fetchall() or []
+                                                    except sqlite3.OperationalError as e:
+                                                        error_msg = f"Auto-alliance query failed after retries for code '{code}': {e}"
+                                                        self.logger.error(error_msg)
+                                                        print(f"ERROR: {error_msg}")
+                                                        auto_alliances = []
+                                                    except Exception as e:
+                                                        error_msg = f"Unexpected error in auto-alliance query for code '{code}': {e}"
+                                                        self.logger.error(error_msg)
+                                                        print(f"ERROR: {error_msg}")
+                                                        auto_alliances = []
                                                 elif is_valid is False:
                                                     invalid_codes_count += 1
                                                     self.logger.warning(f"API code '{code}' is invalid: {validation_msg}")
                                                     validation_status = f"❌ Invalid: {validation_msg}"
-                                                    auto_alliances = []  # Don't auto-use invalid codes
+                                                    auto_alliances = []
                                                 else:
-                                                    self.logger.warning(f"API code '{code}' validation inconclusive: {validation_msg}")
-                                                    validation_status = f"⚠️ Pending: {validation_msg}"
-                                                    auto_alliances = []  # Don't auto-use pending codes
+                                                    self.logger.warning(f"API code '{code}' validation inconclusive after retries: {validation_msg}")
+                                                    validation_status = f"⚠️ Pending"
+                                                    auto_alliances = []
                                             else:
                                                 self.logger.error("GiftOperations cog not found for validation!")
-                                                validation_status = "⚠️ Validation unavailable"
+                                                validation_status = "❌ Error"
                                                 auto_alliances = []
 
                                             self.settings_cursor.execute("SELECT id FROM admin WHERE is_initial = 1")
                                             admin_ids = self.settings_cursor.fetchall()
                                             if admin_ids:
+                                                embed_description = (
+                                                    f"**Gift Code Details**\n"
+                                                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                                                    f"🎁 **Code:** `{code}`\n"
+                                                    f"📅 **Date:** `{formatted_date}`\n"
+                                                    f"📝 **Validation Status:** `{validation_status}`\n"
+                                                    f"🌐 **Source:** `Retrieved from Bot API`\n"
+                                                    f"⏰ **Time:** <t:{int(datetime.now().timestamp())}:R>\n"
+                                                    f"🔄 **Auto Alliance Count:** `{len(auto_alliances)}`\n"
+                                                )
+
+                                                if is_valid is None:
+                                                    embed_description += (
+                                                        f"\n⚠️ **Auto-redemption delayed** - Validation inconclusive after several retries.\n"
+                                                        f"Please wait for periodic validation to complete, after which auto-redemption will begin.\n"
+                                                    )
+
+                                                embed_description += f"━━━━━━━━━━━━━━━━━━━━━━\n"
+
+                                                embed_color = discord.Color.green() if is_valid else (discord.Color.red() if is_valid is False else discord.Color.orange())
+
                                                 admin_embed = discord.Embed(
                                                     title="🎁 New Gift Code Found!",
-                                                    description=(
-                                                        f"**Gift Code Details**\n"
-                                                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                                                        f"🎁 **Code:** `{code}`\n"
-                                                        f"📅 **Date:** `{formatted_date}`\n"
-                                                        f"📝 **Status:** `Retrieved from Bot API`\n"
-                                                        f"⏰ **Time:** <t:{int(datetime.now().timestamp())}:R>\n"
-                                                        f"🔄 **Auto Alliance Count:** `{len(auto_alliances)}`\n"
-                                                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                                                    ),
-                                                    color=discord.Color.green()
+                                                    description=embed_description,
+                                                    color=embed_color
                                                 )
 
                                                 for admin_id in admin_ids:
@@ -300,6 +380,34 @@ class GiftCodeAPI:
                                                             await admin_user.send(embed=admin_embed)
                                                     except Exception as e:
                                                         self.logger.exception(f"Error sending notification to admin {admin_id[0]}: {e}")
+
+                                            # Send notification to all gift code channels
+                                            try:
+                                                self.cursor.execute("SELECT DISTINCT channel_id FROM giftcode_channel")
+                                                gift_channels = self.cursor.fetchall()
+
+                                                if gift_channels:
+                                                    channel_embed = discord.Embed(
+                                                        title="🎁 New Gift Code Retrieved",
+                                                        description=(
+                                                            f"A new gift code has been automatically retrieved from the Gift Code Distribution API.\n\n"
+                                                            f"**Code:** `{code}`\n"
+                                                            f"**Status:** {validation_status}\n"
+                                                            f"**Auto-redemption:** {'Started' if auto_alliances else 'Disabled'}"
+                                                        ),
+                                                        color=embed_color
+                                                    )
+                                                    channel_embed.set_footer(text="Retrieved via API")
+
+                                                    for (channel_id,) in gift_channels:
+                                                        try:
+                                                            channel = self.bot.get_channel(channel_id)
+                                                            if channel:
+                                                                await channel.send(embed=channel_embed)
+                                                        except Exception as e:
+                                                            self.logger.warning(f"Failed to send API code notification to channel {channel_id}: {e}")
+                                            except Exception as e:
+                                                self.logger.exception(f"Error sending gift code channel notifications: {e}")
 
                                             if auto_alliances:
                                                 gift_operations = self.bot.get_cog('GiftOperations')

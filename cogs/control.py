@@ -76,6 +76,24 @@ class Control(commands.Cog):
             self.cursor_settings.execute("INSERT INTO auto (value) VALUES (1)")
         self.conn_settings.commit()
         
+        # Add control settings columns to alliancesettings if they don't exist
+        self.cursor_alliance.execute("PRAGMA table_info(alliancesettings)")
+        columns = [col[1] for col in self.cursor_alliance.fetchall()]
+        
+        if 'auto_remove_on_transfer' not in columns:
+            self.cursor_alliance.execute("""
+                ALTER TABLE alliancesettings 
+                ADD COLUMN auto_remove_on_transfer INTEGER DEFAULT 0
+            """)
+        
+        if 'notify_on_transfer' not in columns:
+            self.cursor_alliance.execute("""
+                ALTER TABLE alliancesettings 
+                ADD COLUMN notify_on_transfer INTEGER DEFAULT 0
+            """)
+        
+        self.conn_alliance.commit()
+        
         self.db_lock = asyncio.Lock()
         self.proxies = self.load_proxies()
         self.alliance_tasks = {}
@@ -91,6 +109,28 @@ class Control(commands.Cog):
             with open('proxy.txt', 'r') as f:
                 proxies = [f"socks4://{line.strip()}" for line in f if line.strip()]
         return proxies
+    
+    def get_auto_remove_setting(self, alliance_id):
+        """Get the auto_remove_on_transfer setting for a specific alliance"""
+        self.cursor_alliance.execute("""
+            SELECT auto_remove_on_transfer 
+            FROM alliancesettings 
+            WHERE alliance_id = ?
+        """, (alliance_id,))
+        result = self.cursor_alliance.fetchone()
+        # Default to 0 (disabled) if not set
+        return result[0] if result and result[0] is not None else 0
+    
+    def get_transfer_notification_setting(self, alliance_id):
+        """Get the notify_on_transfer setting for a specific alliance"""
+        self.cursor_alliance.execute("""
+            SELECT notify_on_transfer 
+            FROM alliancesettings 
+            WHERE alliance_id = ?
+        """, (alliance_id,))
+        result = self.cursor_alliance.fetchone()
+        # Default to 0 (disabled) if not set
+        return result[0] if result and result[0] is not None else 0
 
     async def fetch_user_data(self, fid, proxy=None):
         """Fetch user data using the centralized login handler"""
@@ -214,6 +254,7 @@ class Control(commands.Cog):
             message = await channel.send(embed=embed)
 
         furnace_changes, nickname_changes, kid_changes, check_fail_list = [], [], [], []
+        members_to_remove = []  # Track members that should be removed for bulk check
 
         def safe_list(input_list): # Avoid issues with list indexing
             if not isinstance(input_list, list):
@@ -250,12 +291,9 @@ class Control(commands.Cog):
                         
                         # Check if this is a permanently invalid ID (not found)
                         if error_msg == 'not_found':
-                            # Auto-remove the invalid ID
-                            removed, old_nickname = await self.remove_invalid_fid(fid, "Player does not exist (error 40004)")
-                            if removed:
-                                check_fail_list.append(f"❌ `{fid}` ({old_nickname}) - Player not found (Auto-removed)")
-                            else:
-                                check_fail_list.append(f"❌ `{fid}` - Player not found (Failed to remove)")
+                            # Mark for removal (will check bulk threshold later)
+                            members_to_remove.append((fid, old_nickname, "Player does not exist (error 40004)"))
+                            check_fail_list.append(f"❌ `{fid}` ({old_nickname}) - Player not found (Pending removal)")
                         else:
                             # For other errors, just report without removing
                             check_fail_list.append(f"❌ `{fid}` - {error_msg}")
@@ -277,9 +315,30 @@ class Control(commands.Cog):
                                 self.conn_users.commit()
 
                             if old_kid != new_kid:
-                                kid_changes.append(f"👤 **{old_nickname}** has transferred to a new state\n🔄 Old State: `{old_kid}`\n🆕 New State: `{new_kid}`")
-                                self.cursor_users.execute("UPDATE users SET kid = ? WHERE fid = ?", (new_kid, fid))
-                                self.conn_users.commit()
+                                kid_changes.append(f"👤 {old_nickname} has transferred to a new kingdom\n🔄 Old State: {old_kid}\n🆕 New State: {new_kid}")
+                                
+                                # Check if auto-removal is enabled for this alliance
+                                auto_remove = self.get_auto_remove_setting(alliance_id)
+                                notify_on_transfer = self.get_transfer_notification_setting(alliance_id)
+                                
+                                if auto_remove:
+                                    # Remove user from alliance when auto-removal is enabled
+                                    self.cursor_users.execute("DELETE FROM users WHERE fid = ?", (fid,))
+                                    self.conn_users.commit()
+                                    
+                                    # Only notify if notifications are enabled for auto-removal
+                                    if notify_on_transfer:
+                                        self.cursor_settings.execute("SELECT id FROM admin WHERE is_initial = 1")
+                                        admin_data = self.cursor_settings.fetchone()
+                                        
+                                        if admin_data:
+                                            user = await self.bot.fetch_user(admin_data[0])
+                                            if user:
+                                                await user.send(f"❌ {old_nickname} ({fid}) was removed from the users table due to kingdom transfer.")
+                                else:
+                                    # Just update kid without removing (default behavior)
+                                    self.cursor_users.execute("UPDATE users SET kid = ? WHERE fid = ?", (new_kid, fid))
+                                    self.conn_users.commit()
 
                             if new_furnace_lv != old_furnace_lv:
                                 new_furnace_display = level_mapping.get(new_furnace_lv, new_furnace_lv)
@@ -310,6 +369,57 @@ class Control(commands.Cog):
                     await message.edit(embed=embed)
 
             i += 20
+
+        # Bulk removal safeguard - check if we're removing too many members
+        removal_count = len(members_to_remove)
+        removal_percentage = (removal_count / total_users * 100) if total_users > 0 else 0
+
+        # Only apply safeguard if alliance has at least 5 members and would remove >20%
+        if total_users >= 5 and removal_percentage > 20:
+            self.logger.error(f"BULK REMOVAL BLOCKED: Attempted to remove {removal_count}/{total_users} members ({removal_percentage:.1f}%) from alliance {alliance_id}")
+
+            # Send alert to channel
+            alert_embed = discord.Embed(
+                title="⚠️ BULK REMOVAL BLOCKED - SAFETY TRIGGERED",
+                description=(
+                    f"**Alliance Check Safety System Activated**\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🏰 **Alliance:** {alliance_name}\n"
+                    f"👥 **Total Members:** {total_users}\n"
+                    f"❌ **Attempted Removals:** {removal_count}\n"
+                    f"📊 **Percentage:** {removal_percentage:.1f}%\n"
+                    f"🛡️ **Threshold:** 20%\n\n"
+                    f"**Reason:** Removing more than 20% of members suggests a potential API issue.\n\n"
+                    f"**Members that would have been removed:**\n"
+                    + "\n".join([f"• `{fid}` ({nickname})" for fid, nickname, _ in members_to_remove[:10]])
+                    + (f"\n• ... and {removal_count - 10} more" if removal_count > 10 else "")
+                    + f"\n\n⚠️ **Action Required:** Please verify these members manually or wait for API issues to resolve."
+                ),
+                color=discord.Color.red()
+            )
+            alert_embed.set_footer(text="🛡️ Automatic Safety System | No members were removed")
+            await channel.send(embed=alert_embed)
+
+            # Update check_fail_list to show blocked status instead of pending
+            for i, item in enumerate(check_fail_list):
+                if "Pending removal" in item:
+                    check_fail_list[i] = item.replace("Pending removal", "REMOVAL BLOCKED (Safety)")
+        else:
+            # Safe to proceed with removals
+            if members_to_remove:
+                self.logger.info(f"Proceeding with removal of {removal_count} members from alliance {alliance_id} ({removal_percentage:.1f}%)")
+
+                for fid, nickname, reason in members_to_remove:
+                    removed, _ = await self.remove_invalid_fid(fid, reason)
+
+                    # Update check_fail_list to show actual removal status
+                    for i, item in enumerate(check_fail_list):
+                        if f"`{fid}`" in item and "Pending removal" in item:
+                            if removed:
+                                check_fail_list[i] = item.replace("Pending removal", "Auto-removed")
+                            else:
+                                check_fail_list[i] = item.replace("Pending removal", "Failed to remove")
+                            break
 
         end_time = datetime.now()
         duration = end_time - start_time
@@ -370,9 +480,23 @@ class Control(commands.Cog):
                 value=str(duration),
                 inline=True
             )
+            # Build the value string without nested f-strings for Python 3.9+ compatibility
+            total_changes = len(furnace_changes) + len(nickname_changes) + len(kid_changes)
+            changes_text = f"🔄 {total_changes} changes detected"
+
+            # Add auto-removed count if any
+            auto_removed_count = sum(1 for item in check_fail_list if 'Auto-removed' in item)
+            if auto_removed_count > 0:
+                changes_text += f"\n🗑️ {auto_removed_count} invalid IDs removed"
+
+            # Add check failures count if any
+            check_failure_count = sum(1 for item in check_fail_list if 'Auto-removed' not in item)
+            if check_failure_count > 0:
+                changes_text += f"\n❌ {check_failure_count} check failures"
+
             embed.add_field(
                 name="📈 Total Changes",
-                value=f"🔄 {len(furnace_changes) + len(nickname_changes) + len(kid_changes)} changes detected" + (f"\n🗑️ {sum(1 for item in check_fail_list if 'Auto-removed' in item)} invalid IDs removed" if any('Auto-removed' in item for item in check_fail_list) else "") + (f"\n❌ {sum(1 for item in check_fail_list if 'Auto-removed' not in item)} check failures" if any('Auto-removed' not in item for item in check_fail_list) else ""),
+                value=changes_text,
                 inline=True
             )
         else:

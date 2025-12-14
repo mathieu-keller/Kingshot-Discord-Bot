@@ -7,6 +7,8 @@ import time
 from typing import List
 from datetime import datetime
 import os
+import csv
+import io
 from .login_handler import LoginHandler
 
 class PaginationView(discord.ui.View):
@@ -122,10 +124,11 @@ class AllianceMemberOperations(commands.Cog):
             description=(
                 "Please select an operation from below:\n\n"
                 "**Available Operations:**\n"
-                "➕ `Add Member` - Add new members to alliance\n"
-                "➖ `Remove Member` - Remove members from alliance\n"
-                "📋 `View Members` - View alliance member list\n"
-                "🔄 `Transfer Member` - Transfer members to another alliance\n"
+                "➕ `Add Members` - Add new members (supports IDs, CSV/TSV imports)\n"
+                "🔄 `Transfer Members` - Transfer members to another alliance\n"
+                "➖ `Remove Members` - Remove members from alliance\n"
+                "👥 `View Members` - View alliance member list\n"
+                "📊 `Export Members` - Export member data to CSV/TSV\n"
                 "🏠 `Main Menu` - Return to main menu"
             ),
             color=discord.Color.blue()
@@ -140,7 +143,7 @@ class AllianceMemberOperations(commands.Cog):
                 self.bot = cog.bot
 
             @discord.ui.button(
-                label="Add Member",
+                label="Add Members",
                 emoji="➕",
                 style=discord.ButtonStyle.success,
                 custom_id="add_member",
@@ -231,7 +234,7 @@ class AllianceMemberOperations(commands.Cog):
                     )
 
             @discord.ui.button(
-                label="Remove Member",
+                label="Remove Members",
                 emoji="➖",
                 style=discord.ButtonStyle.danger,
                 custom_id="remove_member",
@@ -342,12 +345,20 @@ class AllianceMemberOperations(commands.Cog):
                             color=discord.Color.red()
                         )
 
-                        member_view = MemberSelectView(members, alliance_name, self.cog, is_remove_operation=True)
-                        
-                        async def member_callback(member_interaction: discord.Interaction):
-                            selected_value = member_view.current_select.values[0]
-                            
-                            if selected_value == "all":
+                        member_view = MemberSelectView(
+                            members,
+                            alliance_name,
+                            self.cog,
+                            is_remove_operation=True,
+                            alliance_id=alliance_id,
+                            alliances=alliances_with_counts
+                        )
+
+                        async def member_callback(member_interaction: discord.Interaction, selected_fids=None, delete_all=False):
+                            # Handle multi-select or delete all
+                            if delete_all or (selected_fids and len(selected_fids) == len(members)):
+                                # Delete all members
+                                selected_value = "all"
                                 confirm_embed = discord.Embed(
                                     title="⚠️ Confirmation Required",
                                     description=f"A total of **{len(members)}** members will be deleted.\nDo you confirm?",
@@ -437,41 +448,45 @@ class AllianceMemberOperations(commands.Cog):
                                     view=confirm_view
                                 )
                             
-                            else:
+                            elif selected_fids:
+                                # Bulk delete selected members
                                 try:
-                                    selected_fid = selected_value
                                     with sqlite3.connect('db/users.sqlite') as users_db:
                                         cursor = users_db.cursor()
-                                        cursor.execute("SELECT nickname FROM users WHERE fid = ?", (selected_fid,))
-                                        nickname = cursor.fetchone()[0]
-                                        
-                                        cursor.execute("DELETE FROM users WHERE fid = ?", (selected_fid,))
+                                        placeholders = ','.join('?' * len(selected_fids))
+                                        cursor.execute(f"SELECT fid, nickname FROM users WHERE fid IN ({placeholders})", selected_fids)
+                                        removed_members = cursor.fetchall()
+
+                                        cursor.execute(f"DELETE FROM users WHERE fid IN ({placeholders})", selected_fids)
                                         users_db.commit()
-                                    
+
                                     try:
                                         with sqlite3.connect('db/settings.sqlite') as settings_db:
                                             cursor = settings_db.cursor()
                                             cursor.execute("""
-                                                SELECT channel_id 
-                                                FROM alliance_logs 
+                                                SELECT channel_id
+                                                FROM alliance_logs
                                                 WHERE alliance_id = ?
                                             """, (alliance_id,))
                                             alliance_log_result = cursor.fetchone()
-                                            
+
                                             if alliance_log_result and alliance_log_result[0]:
                                                 log_embed = discord.Embed(
-                                                    title="🗑️ Member Removed",
+                                                    title="🗑️ Bulk Member Removal",
                                                     description=(
                                                         f"**Alliance:** {alliance_name}\n"
                                                         f"**Administrator:** {member_interaction.user.name} (`{member_interaction.user.id}`)\n"
                                                         f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-                                                        f"**Removed Member:**\n"
-                                                        f"👤 **Name:** {nickname}\n"
-                                                        f"🆔 **ID:** {selected_fid}"
+                                                        f"**Total Members Removed:** {len(removed_members)}\n\n"
+                                                        "**Removed Members:**\n"
+                                                        "```\n" +
+                                                        "\n".join([f"ID{idx+1}: {fid} - {nickname}" for idx, (fid, nickname) in enumerate(removed_members[:20])]) +
+                                                        (f"\n... and {len(removed_members) - 20} more" if len(removed_members) > 20 else "") +
+                                                        "\n```"
                                                     ),
                                                     color=discord.Color.red()
                                                 )
-                                                
+
                                                 try:
                                                     alliance_channel_id = int(alliance_log_result[0])
                                                     alliance_log_channel = self.bot.get_channel(alliance_channel_id)
@@ -481,20 +496,28 @@ class AllianceMemberOperations(commands.Cog):
                                                     self.log_message(f"Alliance Log Sending Error: {e}")
                                     except Exception as e:
                                         self.log_message(f"Log record error: {e}")
-                                    
+
                                     success_embed = discord.Embed(
-                                        title="✅ Member Deleted",
-                                        description=f"**{nickname}** has been successfully deleted.",
+                                        title="✅ Members Deleted",
+                                        description=f"Successfully deleted **{len(removed_members)}** member(s).",
                                         color=discord.Color.green()
                                     )
-                                    await member_interaction.response.edit_message(embed=success_embed, view=None)
-                                    
+                                    try:
+                                        await member_interaction.response.edit_message(embed=success_embed, view=None)
+                                    except:
+                                        await member_interaction.edit_original_response(embed=success_embed, view=None)
+
                                 except Exception as e:
-                                    self.log_message(f"Error in member removal: {e}")
-                                    await member_interaction.response.send_message(
-                                        "❌ An error occurred during member removal.",
-                                        ephemeral=True
+                                    self.log_message(f"Error in bulk member removal: {e}")
+                                    error_embed = discord.Embed(
+                                        title="❌ Error",
+                                        description="An error occurred during member removal.",
+                                        color=discord.Color.red()
                                     )
+                                    try:
+                                        await member_interaction.response.send_message(embed=error_embed, ephemeral=True)
+                                    except:
+                                        await member_interaction.followup.send(embed=error_embed, ephemeral=True)
 
                         member_view.callback = member_callback
                         await interaction.response.edit_message(
@@ -521,7 +544,7 @@ class AllianceMemberOperations(commands.Cog):
                 emoji="👥",
                 style=discord.ButtonStyle.primary,
                 custom_id="view_members",
-                row=0
+                row=1
             )
             async def view_members_button(self, button_interaction: discord.Interaction, button: discord.ui.Button):
                 try:
@@ -595,7 +618,7 @@ class AllianceMemberOperations(commands.Cog):
                         with sqlite3.connect('db/users.sqlite') as users_db:
                             cursor = users_db.cursor()
                             cursor.execute("""
-                                SELECT fid, nickname, furnace_lv
+                                SELECT fid, nickname, furnace_lv, kid
                                 FROM users 
                                 WHERE alliance = ? 
                                 ORDER BY furnace_lv DESC, nickname
@@ -637,9 +660,9 @@ class AllianceMemberOperations(commands.Cog):
                             embed = public_embed.copy()
                             
                             member_list = ""
-                            for idx, (fid, nickname, furnace_lv) in enumerate(chunk, start=page * members_per_page + 1):
+                            for idx, (fid, nickname, furnace_lv, kid) in enumerate(chunk, start=page * members_per_page + 1):
                                 level = self.cog.level_mapping.get(furnace_lv, str(furnace_lv))
-                                member_list += f"**{idx:02d}.** 👤 {nickname}\n└ ⚔️ `TG: {level}`\n\n"
+                                member_list += f"👤 {nickname}\n└ ⚔ {level}\n└ 🆔 ID: {fid}\n└ 👑 Kingdom: {kid}\n\n"
 
                             embed.description += member_list
                             
@@ -680,6 +703,144 @@ class AllianceMemberOperations(commands.Cog):
                         )
 
             @discord.ui.button(
+                label="Export Members",
+                emoji="📊",
+                style=discord.ButtonStyle.primary,
+                custom_id="export_members",
+                row=1
+            )
+            async def export_members_button(self, button_interaction: discord.Interaction, button: discord.ui.Button):
+                try:
+                    # Check admin permissions
+                    with sqlite3.connect('db/settings.sqlite') as settings_db:
+                        cursor = settings_db.cursor()
+                        cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (button_interaction.user.id,))
+                        admin_result = cursor.fetchone()
+                        
+                        if not admin_result:
+                            await button_interaction.response.send_message(
+                                "❌ You do not have permission to use this command.", 
+                                ephemeral=True
+                            )
+                            return
+                            
+                        is_initial = admin_result[0]
+
+                    # Get available alliances
+                    alliances, special_alliances, is_global = await self.cog.get_admin_alliances(
+                        button_interaction.user.id, 
+                        button_interaction.guild_id
+                    )
+                    
+                    if not alliances:
+                        await button_interaction.response.send_message(
+                            "❌ No alliance found with your permissions.", 
+                            ephemeral=True
+                        )
+                        return
+
+                    # Create special alliance text for display
+                    special_alliance_text = ""
+                    if special_alliances:
+                        special_alliance_text = "\n\n**Special Access Alliances**\n"
+                        special_alliance_text += "━━━━━━━━━━━━━━━━━━━━━━\n"
+                        for _, name in special_alliances:
+                            special_alliance_text += f"🔸 {name}\n"
+                        special_alliance_text += "━━━━━━━━━━━━━━━━━━━━━━"
+
+                    select_embed = discord.Embed(
+                        title="📊 Alliance Selection - Export Members",
+                        description=(
+                            "Select the alliance to export members from:\n\n"
+                            "**Permission Details**\n"
+                            "━━━━━━━━━━━━━━━━━━━━━━\n"
+                            f"👤 **Access Level:** `{'Global Admin' if is_initial == 1 else 'Server Admin'}`\n"
+                            f"🔍 **Access Type:** `{'All Alliances' if is_initial == 1 else 'Server + Special Access'}`\n"
+                            f"📊 **Available Alliances:** `{len(alliances)}`\n"
+                            "━━━━━━━━━━━━━━━━━━━━━━"
+                            f"{special_alliance_text}"
+                        ),
+                        color=discord.Color.blue()
+                    )
+
+                    # Get member counts for alliances
+                    alliances_with_counts = []
+                    for alliance_id, name in alliances:
+                        with sqlite3.connect('db/users.sqlite') as users_db:
+                            cursor = users_db.cursor()
+                            cursor.execute("SELECT COUNT(*) FROM users WHERE alliance = ?", (alliance_id,))
+                            member_count = cursor.fetchone()[0]
+                            alliances_with_counts.append((alliance_id, name, member_count))
+
+                    # Create view for alliance selection with ALL option
+                    view = AllianceSelectViewWithAll(alliances_with_counts, self.cog)
+                    
+                    async def select_callback(interaction: discord.Interaction):
+                        selected_value = view.current_select.values[0]
+                        
+                        if selected_value == "all":
+                            alliance_id = "all"
+                            alliance_name = "ALL ALLIANCES"
+                            
+                            # Show column selection with alliance name column
+                            column_embed = discord.Embed(
+                                title="📊 Select Export Columns",
+                                description=(
+                                    f"**Export Type:** ALL ALLIANCES\n"
+                                    f"**Total Alliances:** {len(alliances_with_counts)}\n\n"
+                                    "Click the buttons to toggle columns on/off.\n"
+                                    "All columns are selected by default.\n\n"
+                                    "**Available Columns:**\n"
+                                    "• **Alliance** - Alliance name\n"
+                                    "• **ID** - Member ID\n"
+                                    "• **Name** - Member's nickname\n"
+                                    "• **FC Level** - Furnace level\n"
+                                    "• **State** - State ID"
+                                ),
+                                color=discord.Color.blue()
+                            )
+                            
+                            column_view = ExportColumnSelectView(alliance_id, alliance_name, self.cog, include_alliance=True)
+                        else:
+                            alliance_id = int(selected_value)
+                            # Get alliance name
+                            alliance_name = next((name for aid, name, _ in alliances_with_counts if aid == alliance_id), "Unknown")
+                            
+                            # Show column selection view for single alliance
+                            column_embed = discord.Embed(
+                                title="📊 Select Export Columns",
+                                description=(
+                                    f"**Alliance:** {alliance_name}\n\n"
+                                    "Click the buttons to toggle columns on/off.\n"
+                                    "All columns are selected by default.\n\n"
+                                    "**Available Columns:**\n"
+                                    "• **ID** - Member ID\n"
+                                    "• **Name** - Member's nickname\n"
+                                    "• **FC Level** - Furnace level\n"
+                                    "• **State** - State ID"
+                                ),
+                                color=discord.Color.blue()
+                            )
+                            
+                            column_view = ExportColumnSelectView(alliance_id, alliance_name, self.cog, include_alliance=False)
+                        
+                        await interaction.response.edit_message(embed=column_embed, view=column_view)
+
+                    view.callback = select_callback
+                    await button_interaction.response.send_message(
+                        embed=select_embed,
+                        view=view,
+                        ephemeral=True
+                    )
+
+                except Exception as e:
+                    self.cog.log_message(f"Error in export_members_button: {e}")
+                    await button_interaction.response.send_message(
+                        "❌ An error occurred during the export process.",
+                        ephemeral=True
+                    )
+            
+            @discord.ui.button(
                 label="Main Menu", 
                 emoji="🏠", 
                 style=discord.ButtonStyle.secondary,
@@ -688,7 +849,7 @@ class AllianceMemberOperations(commands.Cog):
             async def main_menu_button(self, interaction: discord.Interaction, button: discord.ui.Button):
                 await self.cog.show_main_menu(interaction)
 
-            @discord.ui.button(label="Transfer Member", emoji="🔄", style=discord.ButtonStyle.primary)
+            @discord.ui.button(label="Transfer Members", emoji="🔄", style=discord.ButtonStyle.primary, row=0)
             async def transfer_member_button(self, button_interaction: discord.Interaction, button: discord.ui.Button):
                 try:
                     with sqlite3.connect('db/settings.sqlite') as settings_db:
@@ -800,22 +961,37 @@ class AllianceMemberOperations(commands.Cog):
                                 color=discord.Color.blue()
                             )
 
-                            member_view = MemberSelectView(members, source_alliance_name, self.cog, is_remove_operation=False)
-                            
-                            async def member_callback(member_interaction: discord.Interaction):
-                                selected_fid = int(member_view.current_select.values[0])
-                                
+                            member_view = MemberSelectView(
+                                members,
+                                source_alliance_name,
+                                self.cog,
+                                is_remove_operation=False,
+                                alliance_id=source_alliance_id,
+                                alliances=alliances_with_counts
+                            )
+
+                            async def member_callback(member_interaction: discord.Interaction, selected_fids=None):
+                                if not selected_fids:
+                                    await member_interaction.response.send_message("No members selected", ephemeral=True)
+                                    return
+
+                                # Get member names for confirmation
                                 with sqlite3.connect('db/users.sqlite') as users_db:
                                     cursor = users_db.cursor()
-                                    cursor.execute("SELECT nickname FROM users WHERE fid = ?", (selected_fid,))
-                                    selected_member_name = cursor.fetchone()[0]
+                                    placeholders = ','.join('?' * len(selected_fids))
+                                    cursor.execute(f"SELECT fid, nickname FROM users WHERE fid IN ({placeholders})", selected_fids)
+                                    selected_members = cursor.fetchall()
 
-                                
+                                member_list = "\n".join([f"• {nickname} (ID: {fid})" for fid, nickname in selected_members[:10]])
+                                if len(selected_members) > 10:
+                                    member_list += f"\n... and {len(selected_members) - 10} more"
+
                                 target_embed = discord.Embed(
                                     title="🎯 Target Alliance Selection",
                                     description=(
-                                        f"Select target alliance to transfer "
-                                        f"member **{selected_member_name}**:"
+                                        f"**Transferring {len(selected_fids)} member(s):**\n"
+                                        f"{member_list}\n\n"
+                                        f"Select the target alliance:"
                                     ),
                                     color=discord.Color.blue()
                                 )
@@ -840,39 +1016,47 @@ class AllianceMemberOperations(commands.Cog):
 
                                 async def target_callback(target_interaction: discord.Interaction):
                                     target_alliance_id = int(target_select.values[0])
-                                    
+
                                     try:
                                         with sqlite3.connect('db/alliance.sqlite') as alliance_db:
                                             cursor = alliance_db.cursor()
                                             cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (target_alliance_id,))
                                             target_alliance_name = cursor.fetchone()[0]
 
+                                        # Bulk transfer
                                         with sqlite3.connect('db/users.sqlite') as users_db:
                                             cursor = users_db.cursor()
+                                            placeholders = ','.join('?' * len(selected_fids))
                                             cursor.execute(
-                                                "UPDATE users SET alliance = ? WHERE fid = ?",
-                                                (target_alliance_id, selected_fid)
+                                                f"UPDATE users SET alliance = ? WHERE fid IN ({placeholders})",
+                                                [target_alliance_id] + selected_fids
                                             )
                                             users_db.commit()
 
                                         success_embed = discord.Embed(
                                             title="✅ Transfer Successful",
                                             description=(
-                                                f"👤 **Member:** {selected_member_name}\n"
-                                                f"🆔 **ID:** {selected_fid}\n"
+                                                f"**Members Transferred:** {len(selected_fids)}\n"
                                                 f"📤 **Source:** {source_alliance_name}\n"
-                                                f"📥 **Target:** {target_alliance_name}"
+                                                f"📥 **Target:** {target_alliance_name}\n\n"
+                                                f"**Transferred Members:**\n{member_list}"
                                             ),
                                             color=discord.Color.green()
                                         )
-                                        
+
                                         await target_interaction.response.edit_message(
                                             embed=success_embed,
                                             view=None
                                         )
-                                        
+
+                                        # Log the bulk transfer
+                                        self.cog.log_message(
+                                            f"Bulk transfer: {len(selected_fids)} members from {source_alliance_name} to {target_alliance_name}"
+                                        )
+
                                     except Exception as e:
                                         print(f"Transfer error: {e}")
+                                        self.cog.log_message(f"Bulk transfer error: {e}")
                                         error_embed = discord.Embed(
                                             title="❌ Error",
                                             description="An error occurred during the transfer operation.",
@@ -884,10 +1068,16 @@ class AllianceMemberOperations(commands.Cog):
                                         )
 
                                 target_select.callback = target_callback
-                                await member_interaction.response.edit_message(
-                                    embed=target_embed,
-                                    view=target_view
-                                )
+                                try:
+                                    await member_interaction.response.edit_message(
+                                        embed=target_embed,
+                                        view=target_view
+                                    )
+                                except:
+                                    await member_interaction.edit_original_response(
+                                        embed=target_embed,
+                                        view=target_view
+                                    )
 
                             member_view.callback = member_callback
                             await interaction.response.edit_message(
@@ -987,11 +1177,58 @@ class AllianceMemberOperations(commands.Cog):
 
     async def _process_add_user(self, interaction: discord.Interaction, alliance_id: str, alliance_name: str, ids: str):
         """Process the actual user addition operation"""
-        # Handle both comma-separated and newline-separated IDs
-        if '\n' in ids:
-            ids_list = [fid.strip() for fid in ids.split('\n') if fid.strip()]
-        else:
-            ids_list = [fid.strip() for fid in ids.split(",") if fid.strip()]
+        ids_list = []
+        
+        # Check if this is CSV/TSV data with headers
+        lines = [line.strip() for line in ids.split('\n') if line.strip()]
+        if lines and any(delimiter in lines[0] for delimiter in [',', '\t']):
+            # Detect delimiter
+            delimiter = '\t' if '\t' in lines[0] else ','
+            
+            # Try to parse as CSV/TSV
+            try:
+                reader = csv.reader(io.StringIO(ids), delimiter=delimiter)
+                rows = list(reader)
+                
+                if rows and len(rows) > 1:
+                    # Get headers
+                    headers = [h.strip().lower() for h in rows[0]]
+                    
+                    # Find ID column - look for 'id', 'fid'
+                    id_col_index = None
+                    for i, header in enumerate(headers):
+                        if header in ['id', 'fid']:
+                            id_col_index = i
+                            break
+                    
+                    if id_col_index is not None:
+                        # Extract IDs from data rows
+                        for row in rows[1:]:
+                            if len(row) > id_col_index and row[id_col_index].strip():
+                                # Clean the ID
+                                fid = ''.join(c for c in row[id_col_index] if c.isdigit())
+                                if fid:
+                                    ids_list.append(fid)
+                        
+                        if ids_list:
+                            self.log_message(f"Parsed CSV/TSV import: Found {len(ids_list)} IDs from {len(rows)-1} rows")
+                    else:
+                        # No header found, treat first row as data if it looks like IDs
+                        if rows[0] and rows[0][0].strip().isdigit():
+                            for row in rows:
+                                if row and row[0].strip():
+                                    fid = ''.join(c for c in row[0] if c.isdigit())
+                                    if fid:
+                                        ids_list.append(fid)
+            except Exception as e:
+                self.log_message(f"CSV/TSV parsing failed, falling back to simple parsing: {e}")
+        
+        # If CSV/TSV parsing didn't work or wasn't applicable, use simple parsing
+        if not ids_list:
+            if '\n' in ids:
+                ids_list = [fid.strip() for fid in ids.split('\n') if fid.strip()]
+            else:
+                ids_list = [fid.strip() for fid in ids.split(",") if fid.strip()]
 
         # Pre-check which IDs already exist in the database
         already_in_db = []
@@ -1074,13 +1311,26 @@ class AllianceMemberOperations(commands.Cog):
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         log_file_path = os.path.join(self.log_directory, 'add_memberlog.txt')
         
+        # Determine input format
+        input_format = "Simple IDs"
+        if '\t' in ids and ',' not in ids.split('\n')[0] if '\n' in ids else ids:
+            input_format = "TSV Format"
+        elif ',' in ids and len(ids.split(',')[0]) > 10:
+            input_format = "CSV Format"
+        
         try:
             with open(log_file_path, 'a', encoding='utf-8') as log_file:
                 log_file.write(f"\n{'='*50}\n")
                 log_file.write(f"Date: {timestamp}\n")
                 log_file.write(f"Administrator: {interaction.user.name} (ID: {interaction.user.id})\n")
                 log_file.write(f"Alliance: {alliance_name} (ID: {alliance_id})\n")
-                log_file.write(f"IDs to Process: {ids.replace(chr(10), ', ')}\n")
+                log_file.write(f"Input Format: {input_format}\n")
+                # Avoid nested f-strings for Python 3.9+ compatibility
+                if len(ids_list) <= 20:
+                    ids_display = ', '.join(ids_list)
+                else:
+                    ids_display = f"{', '.join(ids_list[:20])}... ({len(ids_list)} total)"
+                log_file.write(f"IDs to Process: {ids_display}\n")
                 log_file.write(f"Total Members to Process: {total_users}\n")
                 log_file.write(f"API Mode: {self.login_handler.get_mode_text()}\n")
                 log_file.write(f"API Available: {self.login_handler.api_available}\n")
@@ -1410,6 +1660,193 @@ class AllianceMemberOperations(commands.Cog):
         if custom_id == "main_menu":
             await self.show_main_menu(interaction)
     
+    async def process_member_export(self, interaction: discord.Interaction, alliance_id, alliance_name: str, selected_columns: list, export_format: str):
+        """Process the member export with selected columns and format"""
+        try:
+            # Update the message to show processing
+            processing_embed = discord.Embed(
+                title="⏳ Processing Export",
+                description="Generating your export file...",
+                color=discord.Color.blue()
+            )
+            await interaction.response.edit_message(embed=processing_embed, view=None)
+            
+            # Build the SQL query based on selected columns
+            db_columns = [col[0] for col in selected_columns]
+            headers = [col[1] for col in selected_columns]
+            
+            # Check if exporting all alliances
+            if alliance_id == "all":
+                # Need to join with alliance table to get alliance names
+                with sqlite3.connect('db/users.sqlite') as users_db:
+                    # Attach the alliance database to get alliance names
+                    cursor = users_db.cursor()
+                    cursor.execute("ATTACH DATABASE 'db/alliance.sqlite' AS alliance_db")
+                    
+                    # Build query columns
+                    query_columns = []
+                    for db_col, _ in selected_columns:
+                        if db_col == 'alliance_name':
+                            query_columns.append('a.name AS alliance_name')
+                        else:
+                            query_columns.append(f'u.{db_col}')
+                    
+                    # Query with join
+                    query = f"""
+                        SELECT {', '.join(query_columns)}
+                        FROM users u
+                        JOIN alliance_db.alliance_list a ON u.alliance = a.alliance_id
+                        ORDER BY a.name, u.furnace_lv DESC, u.nickname
+                    """
+                    cursor.execute(query)
+                    members = cursor.fetchall()
+                    cursor.execute("DETACH DATABASE alliance_db")
+            else:
+                # Single alliance export
+                with sqlite3.connect('db/users.sqlite') as users_db:
+                    cursor = users_db.cursor()
+                    # Filter out alliance_name if it's in the columns (not applicable for single alliance)
+                    filtered_columns = [col for col in selected_columns if col[0] != 'alliance_name']
+                    db_columns = [col[0] for col in filtered_columns]
+                    headers = [col[1] for col in filtered_columns]
+                    
+                    query = f"SELECT {', '.join(db_columns)} FROM users WHERE alliance = ? ORDER BY furnace_lv DESC, nickname"
+                    cursor.execute(query, (alliance_id,))
+                    members = cursor.fetchall()
+            
+            if not members:
+                error_embed = discord.Embed(
+                    title="❌ No Members Found",
+                    description="No members found in this alliance to export.",
+                    color=discord.Color.red()
+                )
+                await interaction.edit_original_response(embed=error_embed)
+                return
+            
+            # Create the export file in memory
+            output = io.StringIO()
+            delimiter = '\t' if export_format == 'tsv' else ','
+            writer = csv.writer(output, delimiter=delimiter)
+            
+            # Write headers
+            writer.writerow(headers)
+            
+            # Process and write member data
+            for member in members:
+                row = []
+                # Use the appropriate columns list based on whether it's a single or all export
+                columns_to_use = selected_columns if alliance_id == "all" else filtered_columns
+                for i, (db_col, header) in enumerate(columns_to_use):
+                    value = member[i]
+                    
+                    # Special formatting for TC Level
+                    if db_col == 'furnace_lv' and value is not None:
+                        value = self.level_mapping.get(value, str(value))
+                    
+                    # Handle None values
+                    if value is None:
+                        value = ''
+                    
+                    row.append(value)
+                
+                writer.writerow(row)
+            
+            # Get the CSV/TSV content
+            output.seek(0)
+            file_content = output.getvalue()
+            
+            # Create filename with timestamp
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"{alliance_name.replace(' ', '_')}_members_{timestamp}.{export_format}"
+            
+            # Create Discord file
+            file = discord.File(io.BytesIO(file_content.encode('utf-8')), filename=filename)
+            
+            # Create summary embed
+            summary_embed = discord.Embed(
+                title="📊 Export Ready",
+                description=(
+                    f"**Alliance:** {alliance_name}\n"
+                    f"**Total Members:** {len(members)}\n"
+                    f"**Format:** {export_format.upper()}\n"
+                    f"**Columns Included:** {', '.join(headers)}\n\n"
+                    "Attempting to send the file via DM..."
+                ),
+                color=discord.Color.green()
+            )
+            
+            # Try to DM the user
+            try:
+                dm_embed = discord.Embed(
+                    title="📊 Alliance Member Export",
+                    description=(
+                        f"**Alliance:** {alliance_name}\n"
+                        f"**Export Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                        f"**Total Members:** {len(members)}\n"
+                        f"**Format:** {export_format.upper()}\n"
+                        f"**Columns:** {', '.join(headers)}\n"
+                    ),
+                    color=discord.Color.blue()
+                )
+                
+                # Add statistics
+                if 'furnace_lv' in db_columns:
+                    fc_index = db_columns.index('furnace_lv')
+                    fc_levels = [m[fc_index] for m in members if m[fc_index] is not None]
+                    if fc_levels:
+                        max_fc = max(fc_levels)
+                        avg_fc = sum(fc_levels) / len(fc_levels)
+                        dm_embed.add_field(
+                            name="📈 Statistics",
+                            value=(
+                                f"**Highest TC:** {self.level_mapping.get(max_fc, str(max_fc))}\n"
+                                f"**Average TC:** {self.level_mapping.get(int(avg_fc), str(int(avg_fc)))}"
+                            ),
+                            inline=False
+                        )
+                
+                # Send DM with file
+                await interaction.user.send(embed=dm_embed, file=file)
+                
+                # Update summary embed with success
+                summary_embed.description += "\n\n✅ **File successfully sent via DM!**"
+                summary_embed.color = discord.Color.green()
+                
+                # Log the export
+                self.log_message(
+                    f"Export completed - User: {interaction.user.name} ({interaction.user.id}), "
+                    f"Alliance: {alliance_name} ({alliance_id}), Members: {len(members)}, "
+                    f"Format: {export_format}, Columns: {', '.join(headers)}"
+                )
+                
+            except discord.Forbidden:
+                # DM failed, provide alternative
+                summary_embed.description += (
+                    "\n\n❌ **Could not send DM** (DMs may be disabled)\n"
+                    "The file will be posted here instead."
+                )
+                summary_embed.color = discord.Color.orange()
+                
+                # Since DM failed, edit the original message with the file
+                await interaction.edit_original_response(embed=summary_embed)
+                # Send file as a follow-up
+                await interaction.followup.send(file=file, ephemeral=True)
+                return
+            
+            await interaction.edit_original_response(embed=summary_embed)
+            
+        except Exception as e:
+            self.log_message(f"Error in process_member_export: {e}")
+            error_embed = discord.Embed(
+                title="❌ Export Failed",
+                description=f"An error occurred during the export process: {str(e)}",
+                color=discord.Color.red()
+            )
+            if interaction.response.is_done():
+                await interaction.edit_original_response(embed=error_embed)
+            else:
+                await interaction.response.send_message(embed=error_embed, ephemeral=True)
+
     async def show_main_menu(self, interaction: discord.Interaction):
         try:
             alliance_cog = self.bot.get_cog("Alliance")
@@ -1438,8 +1875,8 @@ class AddMemberModal(discord.ui.Modal):
         super().__init__(title="Add Member")
         self.alliance_id = alliance_id
         self.add_item(discord.ui.TextInput(
-            label="Enter IDs (comma or newline separated)", 
-            placeholder="Comma: 12345,67890,54321\nNewline:\n12345\n67890\n54321",
+            label="Enter IDs or paste CSV/TSV data",
+            placeholder="12345,67890, or newline-separated IDs, or paste your CSV/TSV export",
             style=discord.TextStyle.paragraph
         ))
 
@@ -1481,16 +1918,30 @@ class AllianceSelectView(discord.ui.View):
         end_idx = min(start_idx + 25, len(self.alliances))
         current_alliances = self.alliances[start_idx:end_idx]
 
+        options = []
+        for alliance_data in current_alliances:
+            # Handle both 3-tuple and 4-tuple formats
+            if len(alliance_data) == 4:
+                alliance_id, name, count, is_assigned = alliance_data
+                label = f"{name[:45]} {'✓ Assigned' if is_assigned else ''}"[:50]
+                description = f"ID: {alliance_id} | Members: {count}{' | Already Assigned' if is_assigned else ''}"[:100]
+            else:
+                alliance_id, name, count = alliance_data
+                label = f"{name[:50]}"
+                description = f"ID: {alliance_id} | Members: {count}"
+
+            options.append(
+                discord.SelectOption(
+                    label=label,
+                    value=str(alliance_id),
+                    description=description,
+                    emoji="✅" if len(alliance_data) == 4 and alliance_data[3] else "🏰"
+                )
+            )
+
         select = discord.ui.Select(
             placeholder=f"🏰 Select an alliance... (Page {self.page + 1}/{self.max_page + 1})",
-            options=[
-                discord.SelectOption(
-                    label=f"{name[:50]}",
-                    value=str(alliance_id),
-                    description=f"ID: {alliance_id} | Members: {count}",
-                    emoji="🏰"
-                ) for alliance_id, name, count in current_alliances
-            ]
+            options=options
         )
         
         async def select_callback(interaction: discord.Interaction):
@@ -1585,17 +2036,17 @@ class IDSearchModal(discord.ui.Modal):
                         ephemeral=True
                     )
                 return
-            
-            # Original transfer logic
+
+            # Get member information
             with sqlite3.connect('db/users.sqlite') as users_db:
                 cursor = users_db.cursor()
                 cursor.execute("""
                     SELECT fid, nickname, furnace_lv, alliance
-                    FROM users 
+                    FROM users
                     WHERE fid = ?
                 """, (fid,))
                 user_result = cursor.fetchone()
-                
+
                 if not user_result:
                     await interaction.response.send_message(
                         "❌ No member with this ID was found.",
@@ -1604,19 +2055,105 @@ class IDSearchModal(discord.ui.Modal):
                     return
 
                 fid, nickname, furnace_lv, current_alliance_id = user_result
- 
+
                 with sqlite3.connect('db/alliance.sqlite') as alliance_db:
                     cursor = alliance_db.cursor()
                     cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (current_alliance_id,))
                     current_alliance_name = cursor.fetchone()[0]
 
+                # Handle remove context
+                if self.context == "remove":
+                    embed = discord.Embed(
+                        title="✅ Member Found - Delete Process",
+                        description=(
+                            f"**Member Information:**\n"
+                            f"👤 **Name:** {nickname}\n"
+                            f"🆔 **ID:** {fid}\n"
+                            f"⚔️ **Level:** {self.cog.level_mapping.get(furnace_lv, str(furnace_lv))}\n"
+                            f"🏰 **Current Alliance:** {current_alliance_name}\n\n"
+                            "⚠️ **Are you sure you want to delete this member?**"
+                        ),
+                        color=discord.Color.red()
+                    )
+
+                    view = discord.ui.View()
+                    confirm_button = discord.ui.Button(
+                        label="✅ Confirm Delete",
+                        style=discord.ButtonStyle.danger
+                    )
+                    cancel_button = discord.ui.Button(
+                        label="❌ Cancel",
+                        style=discord.ButtonStyle.secondary
+                    )
+
+                    async def confirm_callback(confirm_interaction: discord.Interaction):
+                        try:
+                            with sqlite3.connect('db/users.sqlite') as users_db:
+                                cursor = users_db.cursor()
+                                cursor.execute("DELETE FROM users WHERE fid = ?", (fid,))
+                                users_db.commit()
+
+                            success_embed = discord.Embed(
+                                title="✅ Member Deleted",
+                                description=(
+                                    f"👤 **Member:** {nickname}\n"
+                                    f"🆔 **ID:** {fid}\n"
+                                    f"🏰 **Alliance:** {current_alliance_name}"
+                                ),
+                                color=discord.Color.green()
+                            )
+
+                            await confirm_interaction.response.edit_message(
+                                embed=success_embed,
+                                view=None
+                            )
+
+                            # Log the deletion
+                            self.cog.log_message(f"Member deleted via ID search: {nickname} (ID: {fid}) from {current_alliance_name}")
+
+                        except Exception as e:
+                            print(f"Delete error: {e}")
+                            error_embed = discord.Embed(
+                                title="❌ Error",
+                                description="An error occurred during the delete operation.",
+                                color=discord.Color.red()
+                            )
+                            await confirm_interaction.response.edit_message(
+                                embed=error_embed,
+                                view=None
+                            )
+
+                    async def cancel_callback(cancel_interaction: discord.Interaction):
+                        cancel_embed = discord.Embed(
+                            title="❌ Deletion Cancelled",
+                            description="Member was not deleted.",
+                            color=discord.Color.orange()
+                        )
+                        await cancel_interaction.response.edit_message(
+                            embed=cancel_embed,
+                            view=None
+                        )
+
+                    confirm_button.callback = confirm_callback
+                    cancel_button.callback = cancel_callback
+                    view.add_item(confirm_button)
+                    view.add_item(cancel_button)
+
+                    await interaction.response.send_message(
+                        embed=embed,
+                        view=view,
+                        ephemeral=True
+                    )
+                    return
+
+                # Transfer logic
                 embed = discord.Embed(
                     title="✅ Member Found - Transfer Process",
                     description=(
                         f"**Member Information:**\n"
                         f"👤 **Name:** {nickname}\n"
                         f"🆔 **ID:** {fid}\n"
-                        f"⚔️ **Level:** {furnace_lv}\n"
+                        f"⚔️ **Level:** {self.cog.level_mapping.get(furnace_lv, str(furnace_lv))}\n"
                         f"🏰 **Current Alliance:** {current_alliance_name}\n\n"
                         "**Transfer Process**\n"
                         "Please select the alliance you want to transfer the member to:"
@@ -1633,23 +2170,23 @@ class IDSearchModal(discord.ui.Modal):
                             description=f"ID: {alliance_id}",
                             emoji="🏰"
                         ) for alliance_id, name, _ in self.alliances
-                        if alliance_id != current_alliance_id  
+                        if alliance_id != current_alliance_id
                     ]
                 )
-                
+
                 view = discord.ui.View()
                 view.add_item(select)
 
                 async def select_callback(select_interaction: discord.Interaction):
                     target_alliance_id = int(select.values[0])
-                    
+
                     try:
                         with sqlite3.connect('db/alliance.sqlite') as alliance_db:
                             cursor = alliance_db.cursor()
                             cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (target_alliance_id,))
                             target_alliance_name = cursor.fetchone()[0]
 
-                        
+
                         with sqlite3.connect('db/users.sqlite') as users_db:
                             cursor = users_db.cursor()
                             cursor.execute(
@@ -1658,7 +2195,7 @@ class IDSearchModal(discord.ui.Modal):
                             )
                             users_db.commit()
 
-                        
+
                         success_embed = discord.Embed(
                             title="✅ Transfer Successful",
                             description=(
@@ -1669,12 +2206,12 @@ class IDSearchModal(discord.ui.Modal):
                             ),
                             color=discord.Color.green()
                         )
-                        
+
                         await select_interaction.response.edit_message(
                             embed=success_embed,
                             view=None
                         )
-                        
+
                     except Exception as e:
                         print(f"Transfer error: {e}")
                         error_embed = discord.Embed(
@@ -1702,58 +2239,40 @@ class IDSearchModal(discord.ui.Modal):
                     ephemeral=True
                 )
 
-class MemberSelectView(discord.ui.View):
-    def __init__(self, members, source_alliance_name, cog, page=0, is_remove_operation=False):
-        super().__init__(timeout=7200)
-        self.members = members
-        self.source_alliance_name = source_alliance_name
+class AllianceSelectViewWithAll(discord.ui.View):
+    def __init__(self, alliances_with_counts, cog):
+        super().__init__(timeout=300)
+        self.alliances = alliances_with_counts
         self.cog = cog
-        self.page = page
-        self.max_page = (len(members) - 1) // 25
         self.current_select = None
         self.callback = None
-        self.member_dict = {str(fid): nickname for fid, nickname, _ in members}
-        self.selected_alliance_id = None
-        self.alliances = None
-        self.is_remove_operation = is_remove_operation
-        self.context = "remove" if is_remove_operation else "transfer"
-        self.update_select_menu()
-
-    def update_select_menu(self):
-        for item in self.children[:]:
-            if isinstance(item, discord.ui.Select):
-                self.remove_item(item)
-
-        start_idx = self.page * 25
-        end_idx = min(start_idx + 25, len(self.members))
-        current_members = self.members[start_idx:end_idx]
-
-        options = []
         
-        if self.page == 0:
-            options.append(discord.SelectOption(
-                label="ALL MEMBERS",
-                value="all",
-                description=f"⚠️ Delete all {len(self.members)} members!",
-                emoji="⚠️"
-            ))
-
-        remaining_slots = 25 - len(options)
-        member_options = [
+        # Calculate total members across all alliances
+        total_members = sum(count for _, _, count in alliances_with_counts)
+        
+        # Create select menu with ALL option
+        options = [
             discord.SelectOption(
-                label=f"{nickname[:50]}",
-                value=str(fid),
-                description=f"ID: {fid} | TG: {self.cog.level_mapping.get(furnace_lv, str(furnace_lv))}",
-                emoji="👤"
-            ) for fid, nickname, furnace_lv in current_members[:remaining_slots]
+                label="ALL ALLIANCES",
+                value="all",
+                description=f"Export all {total_members} members from {len(alliances_with_counts)} alliances",
+                emoji="🌍"
+            )
         ]
-        options.extend(member_options)
-
-        # Determine placeholder based on context (remove vs transfer)
-        placeholder_text = "👤 Select member to remove..." if hasattr(self, 'is_remove_operation') and self.is_remove_operation else "👤 Select member to transfer..."
-
+        
+        # Add individual alliance options
+        for alliance_id, name, count in alliances_with_counts[:24]:  # Discord limit is 25 options
+            options.append(
+                discord.SelectOption(
+                    label=f"{name[:50]}",
+                    value=str(alliance_id),
+                    description=f"ID: {alliance_id} | Members: {count}",
+                    emoji="🏰"
+                )
+            )
+        
         select = discord.ui.Select(
-            placeholder=f"{placeholder_text} (Page {self.page + 1}/{self.max_page + 1})",
+            placeholder="🏰 Select an alliance or ALL...",
             options=options
         )
         
@@ -1766,24 +2285,415 @@ class MemberSelectView(discord.ui.View):
         self.add_item(select)
         self.current_select = select
 
-        if hasattr(self, 'prev_button'):
-            self.prev_button.disabled = self.page == 0
-        if hasattr(self, 'next_button'):
-            self.next_button.disabled = self.page == self.max_page
+class ExportColumnSelectView(discord.ui.View):
+    def __init__(self, alliance_id, alliance_name, cog, include_alliance=False):
+        super().__init__(timeout=300)
+        self.alliance_id = alliance_id
+        self.alliance_name = alliance_name
+        self.cog = cog
+        self.include_alliance = include_alliance
+        
+        # Track selected columns (all selected by default)
+        self.selected_columns = {
+            'id': True,
+            'name': True,
+            'fc_level': True,
+            'state': True
+        }
+        
+        # Add alliance column if needed
+        if include_alliance:
+            self.selected_columns['alliance'] = True
+            alliance_btn = discord.ui.Button(
+                label="✅ Alliance", 
+                style=discord.ButtonStyle.primary, 
+                custom_id="toggle_alliance", 
+                row=0
+            )
+            alliance_btn.callback = self.toggle_alliance_button
+            self.add_item(alliance_btn)
+        
+        # Add other column buttons
+        id_btn = discord.ui.Button(label="✅ ID", style=discord.ButtonStyle.primary, custom_id="toggle_id", row=0)
+        id_btn.callback = self.toggle_id_button
+        self.add_item(id_btn)
+        
+        name_btn = discord.ui.Button(label="✅ Name", style=discord.ButtonStyle.primary, custom_id="toggle_name", row=0)
+        name_btn.callback = self.toggle_name_button
+        self.add_item(name_btn)
+        
+        fc_btn = discord.ui.Button(label="✅ TC Level", style=discord.ButtonStyle.primary, custom_id="toggle_fc", row=0 if not include_alliance else 1)
+        fc_btn.callback = self.toggle_fc_button
+        self.add_item(fc_btn)
+        
+        state_btn = discord.ui.Button(label="✅ Kingdom", style=discord.ButtonStyle.primary, custom_id="toggle_state", row=0 if not include_alliance else 1)
+        state_btn.callback = self.toggle_state_button
+        self.add_item(state_btn)
+        
+        next_btn = discord.ui.Button(label="Next ➡️", style=discord.ButtonStyle.success, custom_id="next_step", row=1 if not include_alliance else 2)
+        next_btn.callback = self.next_button
+        self.add_item(next_btn)
+        
+        cancel_btn = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.danger, custom_id="cancel", row=1 if not include_alliance else 2)
+        cancel_btn.callback = self.cancel_button
+        self.add_item(cancel_btn)
+        
+        self.update_buttons()
+    
+    def update_buttons(self):
+        # Update button styles based on selection state
+        for item in self.children:
+            if isinstance(item, discord.ui.Button):
+                if item.custom_id == 'toggle_alliance' and self.include_alliance:
+                    item.style = discord.ButtonStyle.primary if self.selected_columns.get('alliance', False) else discord.ButtonStyle.secondary
+                    item.label = "✅ Alliance" if self.selected_columns.get('alliance', False) else "❌ Alliance"
+                elif item.custom_id == 'toggle_id':
+                    item.style = discord.ButtonStyle.primary if self.selected_columns['id'] else discord.ButtonStyle.secondary
+                    item.label = "✅ ID" if self.selected_columns['id'] else "❌ ID"
+                elif item.custom_id == 'toggle_name':
+                    item.style = discord.ButtonStyle.primary if self.selected_columns['name'] else discord.ButtonStyle.secondary
+                    item.label = "✅ Name" if self.selected_columns['name'] else "❌ Name"
+                elif item.custom_id == 'toggle_fc':
+                    item.style = discord.ButtonStyle.primary if self.selected_columns['fc_level'] else discord.ButtonStyle.secondary
+                    item.label = "✅ TC Level" if self.selected_columns['fc_level'] else "❌ TC Level"
+                elif item.custom_id == 'toggle_state':
+                    item.style = discord.ButtonStyle.primary if self.selected_columns['state'] else discord.ButtonStyle.secondary
+                    item.label = "✅ Kingdom" if self.selected_columns['state'] else "❌ Kingdom"
 
-    @discord.ui.button(label="◀️", style=discord.ButtonStyle.secondary)
-    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def toggle_alliance_button(self, interaction: discord.Interaction):
+        if self.include_alliance:
+            self.selected_columns['alliance'] = not self.selected_columns.get('alliance', True)
+            self.update_buttons()
+            
+            if not any(self.selected_columns.values()):
+                self.selected_columns['alliance'] = True
+                self.update_buttons()
+                await interaction.response.edit_message(
+                    content="⚠️ At least one column must be selected!",
+                    view=self
+                )
+            else:
+                await interaction.response.edit_message(view=self)
+    
+    async def toggle_id_button(self, interaction: discord.Interaction):
+        self.selected_columns['id'] = not self.selected_columns['id']
+        self.update_buttons()
+        
+        if not any(self.selected_columns.values()):
+            self.selected_columns['id'] = True
+            self.update_buttons()
+            await interaction.response.edit_message(
+                content="⚠️ At least one column must be selected!",
+                view=self
+            )
+        else:
+            await interaction.response.edit_message(view=self)
+    
+    async def toggle_name_button(self, interaction: discord.Interaction):
+        self.selected_columns['name'] = not self.selected_columns['name']
+        self.update_buttons()
+        
+        if not any(self.selected_columns.values()):
+            self.selected_columns['name'] = True
+            self.update_buttons()
+            await interaction.response.edit_message(
+                content="⚠️ At least one column must be selected!",
+                view=self
+            )
+        else:
+            await interaction.response.edit_message(view=self)
+    
+    async def toggle_fc_button(self, interaction: discord.Interaction):
+        self.selected_columns['fc_level'] = not self.selected_columns['fc_level']
+        self.update_buttons()
+        
+        if not any(self.selected_columns.values()):
+            self.selected_columns['fc_level'] = True
+            self.update_buttons()
+            await interaction.response.edit_message(
+                content="⚠️ At least one column must be selected!",
+                view=self
+            )
+        else:
+            await interaction.response.edit_message(view=self)
+    
+    async def toggle_state_button(self, interaction: discord.Interaction):
+        self.selected_columns['state'] = not self.selected_columns['state']
+        self.update_buttons()
+        
+        if not any(self.selected_columns.values()):
+            self.selected_columns['state'] = True
+            self.update_buttons()
+            await interaction.response.edit_message(
+                content="⚠️ At least one column must be selected!",
+                view=self
+            )
+        else:
+            await interaction.response.edit_message(view=self)
+    
+    async def next_button(self, interaction: discord.Interaction):
+        # Build selected columns list
+        columns = []
+        if self.include_alliance and self.selected_columns.get('alliance', False):
+            columns.append(('alliance_name', 'Alliance'))
+        if self.selected_columns['id']:
+            columns.append(('fid', 'ID'))
+        if self.selected_columns['name']:
+            columns.append(('nickname', 'Name'))
+        if self.selected_columns['fc_level']:
+            columns.append(('furnace_lv', 'TC Level'))
+        if self.selected_columns['state']:
+            columns.append(('kid', 'Kingdom'))
+        
+        # Show format selection
+        format_embed = discord.Embed(
+            title="📄 Select Export Format",
+            description=(
+                f"**Alliance:** {self.alliance_name}\n"
+                f"**Selected Columns:** {', '.join([col[1] for col in columns])}\n\n"
+                "Please select the export format:"
+            ),
+            color=discord.Color.blue()
+        )
+        
+        format_view = ExportFormatSelectView(self.alliance_id, self.alliance_name, columns, self.cog)
+        await interaction.response.edit_message(embed=format_embed, view=format_view, content=None)
+    
+    async def cancel_button(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(
+            content="❌ Export cancelled.",
+            embed=None,
+            view=None
+        )
+
+class ExportFormatSelectView(discord.ui.View):
+    def __init__(self, alliance_id, alliance_name, selected_columns, cog):
+        super().__init__(timeout=300)
+        self.alliance_id = alliance_id
+        self.alliance_name = alliance_name
+        self.selected_columns = selected_columns
+        self.cog = cog
+    
+    @discord.ui.button(label="CSV (Comma-separated)", emoji="📊", style=discord.ButtonStyle.primary, custom_id="csv")
+    async def csv_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.process_member_export(
+            interaction,
+            self.alliance_id,
+            self.alliance_name,
+            self.selected_columns,
+            'csv'
+        )
+    
+    @discord.ui.button(label="TSV (Tab-separated)", emoji="📋", style=discord.ButtonStyle.primary, custom_id="tsv")
+    async def tsv_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.process_member_export(
+            interaction,
+            self.alliance_id,
+            self.alliance_name,
+            self.selected_columns,
+            'tsv'
+        )
+    
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, custom_id="back")
+    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        column_embed = discord.Embed(
+            title="📊 Select Export Columns",
+            description=(
+                f"**Alliance:** {self.alliance_name}\n\n"
+                "Click the buttons to toggle columns on/off.\n"
+                "All columns are selected by default.\n\n"
+                "**Available Columns:**\n"
+                "• **ID** - Member ID\n"
+                "• **Name** - Member's nickname\n"
+                "• **TC Level** - Town Center level\n"
+                "• **Kingdom** - Kingdom ID"
+            ),
+            color=discord.Color.blue()
+        )
+        
+        # Check if it's an all-alliance export by checking the alliance_id
+        include_alliance = self.alliance_id == "all"
+        if include_alliance:
+            column_embed.description = (
+                f"**Export Type:** ALL ALLIANCES\n\n"
+                "Click the buttons to toggle columns on/off.\n"
+                "All columns are selected by default.\n\n"
+                "**Available Columns:**\n"
+                "• **Alliance** - Alliance name\n"
+                "• **ID** - Member ID\n"
+                "• **Name** - Member's nickname\n"
+                "• **TC Level** - Town Center level\n"
+                "• **Kingdom** - Kingdom ID"
+            )
+        
+        column_view = ExportColumnSelectView(self.alliance_id, self.alliance_name, self.cog, include_alliance)
+        await interaction.response.edit_message(embed=column_embed, view=column_view)
+    
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, custom_id="cancel")
+    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(
+            content="❌ Export cancelled.",
+            embed=None,
+            view=None
+        )
+
+class MemberSelectView(discord.ui.View):
+    def __init__(self, members, source_alliance_name, cog, page=0, is_remove_operation=False, alliance_id=None, alliances=None):
+        super().__init__(timeout=7200)
+        self.members = members
+        self.source_alliance_name = source_alliance_name
+        self.cog = cog
+        self.page = page
+        self.max_page = (len(members) - 1) // 25
+        self.current_select = None
+        self.callback = None
+        self.member_dict = {str(fid): nickname for fid, nickname, _ in members}
+        self.selected_alliance_id = alliance_id
+        self.alliances = alliances
+        self.is_remove_operation = is_remove_operation
+        self.context = "remove" if is_remove_operation else "transfer"
+        self.pending_selections = set()  # Track selected FIDs across pages
+
+        # Remove "Delete All" button if not in remove operation mode
+        if not is_remove_operation:
+            self.remove_item(self._delete_all_button)
+
+        self.update_select_menu()
+        self.update_action_buttons()
+
+    def update_select_menu(self):
+        for item in self.children[:]:
+            if isinstance(item, discord.ui.Select):
+                self.remove_item(item)
+
+        start_idx = self.page * 25
+        end_idx = min(start_idx + 25, len(self.members))
+        current_members = self.members[start_idx:end_idx]
+
+        options = []
+
+        # Build member options
+        for fid, nickname, furnace_lv in current_members:
+            # Mark as default if already selected
+            is_selected = int(fid) in self.pending_selections
+            options.append(discord.SelectOption(
+                label=f"{nickname[:50]}",
+                value=str(fid),
+                description=f"ID: {fid} | TC: {self.cog.level_mapping.get(furnace_lv, str(furnace_lv))}",
+                emoji="✅" if is_selected else "👤",
+                default=is_selected
+            ))
+
+        # Determine placeholder based on context (remove vs transfer)
+        if self.is_remove_operation:
+            placeholder_text = f"👥 Select members to remove (Page {self.page + 1}/{self.max_page + 1})"
+        else:
+            placeholder_text = f"👥 Select members to transfer (Page {self.page + 1}/{self.max_page + 1})"
+
+        # Multi-select dropdown
+        max_vals = min(len(options), 25)
+        select = discord.ui.Select(
+            placeholder=placeholder_text,
+            options=options,
+            max_values=max_vals,
+            min_values=0
+        )
+
+        async def select_callback(interaction: discord.Interaction):
+            try:
+                self.current_select = select
+
+                # Get FIDs on current page
+                current_page_fids = {int(fid) for fid, _, _ in current_members}
+
+                # Remove old selections from this page
+                self.pending_selections -= current_page_fids
+
+                # Add new selections
+                for val in select.values:
+                    self.pending_selections.add(int(val))
+
+                # Update UI
+                self.update_select_menu()
+                self.update_action_buttons()
+                await self.update_main_embed(interaction)
+
+            except Exception as e:
+                print(f"Select callback error: {e}")
+                error_embed = discord.Embed(
+                    title="❌ Error",
+                    description="An error occurred while selecting members. Please try again.",
+                    color=discord.Color.red()
+                )
+                try:
+                    await interaction.response.edit_message(embed=error_embed, view=self)
+                except:
+                    await interaction.followup.send(embed=error_embed, ephemeral=True)
+
+        select.callback = select_callback
+        self.add_item(select)
+        self.current_select = select
+
+        # Update navigation button states
+        if hasattr(self, '_prev_button'):
+            self._prev_button.disabled = self.page == 0
+        if hasattr(self, '_next_button'):
+            self._next_button.disabled = self.page == self.max_page
+
+    async def update_main_embed(self, interaction: discord.Interaction):
+        """Update the main embed with current selection count"""
+        max_fl = max(member[2] for member in self.members)
+        avg_fl = sum(member[2] for member in self.members) / len(self.members)
+
+        selection_text = ""
+        if self.pending_selections:
+            selection_text = f"\n\n**📌 Selected: {len(self.pending_selections)} member(s)**"
+
+        embed = discord.Embed(
+            title=f"👥 {self.source_alliance_name} - Member Selection",
+            description=(
+                "```ml\n"
+                "Alliance Statistics\n"
+                "══════════════════════════\n"
+                f"📊 Total Members    : {len(self.members)}\n"
+                f"⚔️ Highest Level    : {self.cog.level_mapping.get(max_fl, str(max_fl))}\n"
+                f"📈 Average Level    : {self.cog.level_mapping.get(int(avg_fl), str(int(avg_fl)))}\n"
+                "══════════════════════════\n"
+                "```"
+                f"{selection_text}\n"
+                f"Select members using the dropdown below:"
+            ),
+            color=discord.Color.red() if self.is_remove_operation else discord.Color.blue()
+        )
+
+        # For dropdown interactions, we need to defer first, then edit
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+
+        await interaction.edit_original_response(embed=embed, view=self)
+
+    def update_action_buttons(self):
+        """Update the state of action buttons based on selections"""
+        has_selections = len(self.pending_selections) > 0
+
+        if hasattr(self, '_process_button'):
+            self._process_button.disabled = not has_selections
+        if hasattr(self, '_clear_button'):
+            self._clear_button.disabled = not has_selections
+
+    @discord.ui.button(label="◀️", style=discord.ButtonStyle.secondary, row=1)
+    async def _prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.page = max(0, self.page - 1)
         self.update_select_menu()
-        await interaction.response.edit_message(view=self)
+        await self.update_main_embed(interaction)
 
-    @discord.ui.button(label="▶️", style=discord.ButtonStyle.secondary)
-    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="▶️", style=discord.ButtonStyle.secondary, row=1)
+    async def _next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.page = min(self.max_page, self.page + 1)
         self.update_select_menu()
-        await interaction.response.edit_message(view=self)
+        await self.update_main_embed(interaction)
 
-    @discord.ui.button(label="Select by ID", emoji="🔍", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Select by ID", emoji="🔍", style=discord.ButtonStyle.secondary, row=1)
     async def fid_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             
@@ -1804,6 +2714,57 @@ class MemberSelectView(discord.ui.View):
                 "❌ An error has occurred. Please try again.",
                 ephemeral=True
             )
+
+    @discord.ui.button(label="Process Selected", emoji="✅", style=discord.ButtonStyle.success, row=2, disabled=True)
+    async def _process_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Process selected members (delete or transfer)"""
+        if not self.pending_selections:
+            await interaction.response.send_message("No members selected", ephemeral=True)
+            return
+
+        if self.callback:
+            await self.callback(interaction, list(self.pending_selections))
+
+    @discord.ui.button(label="Clear Selection", emoji="🗑️", style=discord.ButtonStyle.secondary, row=2, disabled=True)
+    async def _clear_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Clear all selected members"""
+        self.pending_selections.clear()
+        self.update_select_menu()
+        self.update_action_buttons()
+        await self.update_main_embed(interaction)
+
+    @discord.ui.button(label="Delete All", emoji="⚠️", style=discord.ButtonStyle.danger, row=2)
+    async def _delete_all_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Delete all members in the alliance (only shown for remove operations)"""
+        if not self.is_remove_operation:
+            return
+
+        await interaction.response.send_message(
+            f"⚠️ This will delete ALL {len(self.members)} members from **{self.source_alliance_name}**. Are you sure?",
+            view=DeleteAllConfirmView(self),
+            ephemeral=True
+        )
+
+class DeleteAllConfirmView(discord.ui.View):
+    def __init__(self, parent_view):
+        super().__init__(timeout=60)
+        self.parent_view = parent_view
+
+    @discord.ui.button(label="✅ Confirm Delete All", style=discord.ButtonStyle.danger)
+    async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Call the parent's delete all callback
+        if self.parent_view.callback:
+            all_fids = [fid for fid, _, _ in self.parent_view.members]
+            await self.parent_view.callback(interaction, all_fids, delete_all=True)
+
+    @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        cancel_embed = discord.Embed(
+            title="❌ Cancelled",
+            description="Delete all operation cancelled.",
+            color=discord.Color.orange()
+        )
+        await interaction.response.edit_message(embed=cancel_embed, view=None)
 
 async def setup(bot):
     await bot.add_cog(AllianceMemberOperations(bot))

@@ -463,7 +463,7 @@ class HistoryView(discord.ui.View):
                 color=discord.Color.blue()
             )
 
-            view = AllianceSelectView(alliances_with_counts, self.cog)
+            view = AllianceSelectView(alliances_with_counts, self.cog, page=0, context="furnace_history")
 
             async def alliance_callback(select_interaction: discord.Interaction):
                 try:
@@ -612,7 +612,7 @@ class HistoryView(discord.ui.View):
                 color=discord.Color.blue()
             )
 
-            view = AllianceSelectView(alliances_with_counts, self.cog)
+            view = AllianceSelectView(alliances_with_counts, self.cog, page=0, context="nickname_history")
 
             async def alliance_callback(select_interaction: discord.Interaction):
                 try:

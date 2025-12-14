@@ -65,8 +65,14 @@ class GiftOperations(commands.Cog):
         else:
             if not os.path.exists('db'):
                 os.makedirs('db')
-            self.conn = sqlite3.connect('db/giftcode.sqlite')
+            self.conn = sqlite3.connect('db/giftcode.sqlite', timeout=30.0)
             self.cursor = self.conn.cursor()
+
+            self.conn.execute("PRAGMA journal_mode=WAL")
+            self.conn.execute("PRAGMA synchronous=NORMAL")
+            self.conn.execute("PRAGMA cache_size=10000")
+            self.conn.execute("PRAGMA temp_store=MEMORY")
+            self.conn.commit()
 
         # API Setup
         self.api = GiftCodeAPI(bot)
@@ -116,6 +122,14 @@ class GiftOperations(commands.Cog):
             # Column already exists
             pass
 
+        # Add priority column to giftcodecontrol table if it doesn't exist
+        try:
+            self.cursor.execute("ALTER TABLE giftcodecontrol ADD COLUMN priority INTEGER DEFAULT 0")
+            self.conn.commit()
+        except sqlite3.OperationalError:
+            # Column already exists
+            pass
+
         # WOS API URLs and Key
         self.wos_player_info_url = "https://kingshot-giftcode.centurygame.com/api/player"
         self.wos_giftcode_url = "https://kingshot-giftcode.centurygame.com/api/gift_code"
@@ -140,6 +154,8 @@ class GiftOperations(commands.Cog):
         self.validation_in_progress = False
         self.validation_queue_lock = asyncio.Lock()
         self.validation_queue_task = None
+        # Batch redemption tracking for consolidated progress messages
+        self.redemption_batches = {}  # batch_id -> {message, alliances: {id: status}, giftcode}
 
         self.processing_stats = {
         "total_fids_processed": 0,   # Count of completed claim_giftcode calls
@@ -152,7 +168,7 @@ class GiftOperations(commands.Cog):
         cleaned = ''.join(char for char in giftcode if unicodedata.category(char)[0] != 'C')
         return cleaned.strip()
     
-    async def add_to_validation_queue(self, giftcode, source, message=None, channel=None, operation_type='automatic', alliance_id=None, interaction=None):
+    async def add_to_validation_queue(self, giftcode, source, message=None, channel=None, operation_type='automatic', alliance_id=None, interaction=None, batch_id=None):
         """Add a gift code to the validation queue for processing."""
         async with self.validation_queue_lock:
             queue_item = {
@@ -164,7 +180,8 @@ class GiftOperations(commands.Cog):
                 'status': 'queued',
                 'operation_type': operation_type,
                 'alliance_id': alliance_id,
-                'interaction': interaction
+                'interaction': interaction,
+                'batch_id': batch_id
             }
             self.validation_queue.append(queue_item)
             self.logger.info(f"Added gift code '{giftcode}' to validation queue (source: {source}, type: {operation_type}, queue length: {len(self.validation_queue)})")
@@ -205,9 +222,10 @@ class GiftOperations(commands.Cog):
         operation_type = queue_item.get('operation_type', 'automatic')
         alliance_id = queue_item.get('alliance_id')
         interaction = queue_item.get('interaction')
-        
+        batch_id = queue_item.get('batch_id')
+
         self.logger.info(f"Processing gift code '{giftcode}' from queue (source: {source}, type: {operation_type})")
-        
+
         # Handle redemption
         if operation_type == 'redemption':
             if alliance_id:
@@ -216,10 +234,16 @@ class GiftOperations(commands.Cog):
                     self.alliance_cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
                     alliance_result = self.alliance_cursor.fetchone()
                     alliance_name = alliance_result[0] if alliance_result else f"Alliance {alliance_id}"
-                    
-                    # Send starting message only if interaction exists
+
+                    # Handle batch progress update
+                    if batch_id and batch_id in self.redemption_batches:
+                        batch = self.redemption_batches[batch_id]
+                        batch['alliances'][alliance_id]['status'] = 'processing'
+                        await self._update_batch_progress(batch_id)
+
+                    # Send starting message only if interaction exists (non-batch)
                     progress_message = None
-                    if interaction:
+                    if interaction and not batch_id:
                         start_embed = discord.Embed(
                             title="🔄 Processing Redemption",
                             description=f"Starting gift code redemption for **{alliance_name}**...\n"
@@ -227,12 +251,34 @@ class GiftOperations(commands.Cog):
                             color=discord.Color.blue()
                         )
                         progress_message = await interaction.followup.send(embed=start_embed, ephemeral=True)
-                    
+
                     # Execute the redemption
                     await self.use_giftcode_for_alliance(alliance_id, giftcode)
-                    
-                    # Update the message with completion status if we have a message to update
-                    if interaction and progress_message:
+
+                    # Handle batch completion update
+                    if batch_id and batch_id in self.redemption_batches:
+                        batch = self.redemption_batches[batch_id]
+                        total_codes = batch.get('total_codes', 1)
+
+                        # Increment codes completed for this alliance
+                        batch['alliances'][alliance_id]['codes_completed'] = batch['alliances'][alliance_id].get('codes_completed', 0) + 1
+                        codes_done = batch['alliances'][alliance_id]['codes_completed']
+
+                        # Mark alliance as completed only when all codes are done for it
+                        if codes_done >= total_codes:
+                            batch['alliances'][alliance_id]['status'] = 'completed'
+                        else:
+                            batch['alliances'][alliance_id]['status'] = 'processing'
+
+                        await self._update_batch_progress(batch_id)
+
+                        # Clean up batch if all alliances complete
+                        all_done = all(info['status'] in ('completed', 'error') for info in batch['alliances'].values())
+                        if all_done:
+                            del self.redemption_batches[batch_id]
+
+                    # Update the message with completion status if we have a message to update (non-batch)
+                    elif interaction and progress_message:
                         complete_embed = discord.Embed(
                             title="✅ Redemption Complete",
                             description=f"Gift code redemption completed for **{alliance_name}**.\n"
@@ -241,11 +287,32 @@ class GiftOperations(commands.Cog):
                         )
                         try:
                             await progress_message.edit(embed=complete_embed)
-                        except: # If edit fails, just skip it
+                        except:
                             pass
                 except Exception as e:
                     self.logger.exception(f"Error in manual redemption for alliance {alliance_id}: {e}")
-                    if interaction:
+
+                    # Handle batch error update
+                    if batch_id and batch_id in self.redemption_batches:
+                        batch = self.redemption_batches[batch_id]
+                        total_codes = batch.get('total_codes', 1)
+
+                        # Still count this as a code attempt for progress
+                        batch['alliances'][alliance_id]['codes_completed'] = batch['alliances'][alliance_id].get('codes_completed', 0) + 1
+                        codes_done = batch['alliances'][alliance_id]['codes_completed']
+
+                        # Mark alliance as error (but continue with other alliances)
+                        if codes_done >= total_codes:
+                            batch['alliances'][alliance_id]['status'] = 'error'
+
+                        await self._update_batch_progress(batch_id)
+
+                        # Clean up batch if all alliances complete
+                        all_done = all(info['status'] in ('completed', 'error') for info in batch['alliances'].values())
+                        if all_done:
+                            del self.redemption_batches[batch_id]
+
+                    elif interaction:
                         error_embed = discord.Embed(
                             title="❌ Redemption Error",
                             description=f"An error occurred during redemption for **{alliance_name}**: {str(e)}",
@@ -254,7 +321,7 @@ class GiftOperations(commands.Cog):
                         if progress_message:
                             try:
                                 await progress_message.edit(embed=error_embed)
-                            except: # If edit fails, send a new message
+                            except:
                                 await interaction.followup.send(embed=error_embed, ephemeral=True)
                         else:
                             await interaction.followup.send(embed=error_embed, ephemeral=True)
@@ -353,7 +420,7 @@ class GiftOperations(commands.Cog):
     
     async def _process_auto_use(self, giftcode):
         """Process auto-use for valid gift codes."""
-        self.cursor.execute("SELECT alliance_id FROM giftcodecontrol WHERE status = 1")
+        self.cursor.execute("SELECT alliance_id FROM giftcodecontrol WHERE status = 1 ORDER BY priority ASC, alliance_id ASC")
         auto_alliances = self.cursor.fetchall()
         
         if auto_alliances:
@@ -390,24 +457,126 @@ class GiftOperations(commands.Cog):
                 'queue_by_code': queue_by_code
             }
     
-    async def add_manual_redemption_to_queue(self, giftcode, alliance_ids, interaction):
-        """Add manual redemption requests to validation queue."""
+    async def add_manual_redemption_to_queue(self, giftcodes, alliance_ids, interaction):
+        """Add manual redemption requests to validation queue.
+
+        Args:
+            giftcodes: Single gift code string or list of gift codes
+            alliance_ids: List of alliance IDs
+            interaction: Discord interaction for progress messages
+        """
+        # Normalize giftcodes to list
+        if isinstance(giftcodes, str):
+            giftcodes = [giftcodes]
+
         queue_positions = []
-        
+        total_redemptions = len(giftcodes) * len(alliance_ids)
+
+        # Create batch for multiple redemptions
+        batch_id = None
+        if total_redemptions > 1 and interaction:
+            import uuid
+            batch_id = str(uuid.uuid4())
+
+            # Get alliance names for the batch
+            alliances_info = {}
+            for aid in alliance_ids:
+                self.alliance_cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (aid,))
+                result = self.alliance_cursor.fetchone()
+                name = result[0] if result else f"Alliance {aid}"
+                alliances_info[aid] = {'name': name, 'status': 'pending', 'codes_completed': 0}
+
+            # Send initial consolidated progress message
+            embed = self._build_batch_progress_embed(giftcodes, alliances_info)
+            progress_message = await interaction.followup.send(embed=embed, ephemeral=True)
+
+            # Store batch info
+            self.redemption_batches[batch_id] = {
+                'message': progress_message,
+                'alliances': alliances_info,
+                'giftcodes': giftcodes,
+                'total_codes': len(giftcodes)
+            }
+
+        # Queue order: Alliance 1 -> all codes, then Alliance 2 -> all codes, etc.
         for alliance_id in alliance_ids:
-            await self.add_to_validation_queue(
-                giftcode=giftcode,
-                source='manual',
-                operation_type='redemption',
-                alliance_id=alliance_id,
-                interaction=interaction
-            )
-            
-            queue_status = await self.get_queue_status()
-            queue_positions.append(queue_status['queue_length'])
-        
+            for giftcode in giftcodes:
+                await self.add_to_validation_queue(
+                    giftcode=giftcode,
+                    source='manual',
+                    operation_type='redemption',
+                    alliance_id=alliance_id,
+                    interaction=interaction if not batch_id else None,
+                    batch_id=batch_id
+                )
+
+                queue_status = await self.get_queue_status()
+                queue_positions.append(queue_status['queue_length'])
+
         return queue_positions
-    
+
+    def _build_batch_progress_embed(self, giftcodes, alliances_info, total_codes=None):
+        """Build the consolidated progress embed for batch redemption."""
+        # Handle both single code (string) and multiple codes (list)
+        if isinstance(giftcodes, str):
+            giftcodes = [giftcodes]
+
+        if total_codes is None:
+            total_codes = len(giftcodes)
+
+        lines = []
+        for aid, info in alliances_info.items():
+            status = info['status']
+            codes_completed = info.get('codes_completed', 0)
+
+            if status == 'pending':
+                icon = "⏳"
+            elif status == 'processing':
+                icon = "🔄"
+            elif status == 'completed':
+                icon = "✅"
+            elif status == 'error':
+                icon = "❌"
+            else:
+                icon = "⏳"
+
+            # Show code progress for multi-code batches
+            if total_codes > 1:
+                lines.append(f"{icon} **{info['name']}** ({codes_completed}/{total_codes} codes)")
+            else:
+                lines.append(f"{icon} **{info['name']}**")
+
+        completed_alliances = sum(1 for info in alliances_info.values() if info['status'] == 'completed')
+        total_alliances = len(alliances_info)
+
+        # Build description based on single or multiple codes
+        if total_codes > 1:
+            code_display = f"ALL ({total_codes} codes)"
+        else:
+            code_display = f"`{giftcodes[0]}`"
+
+        embed = discord.Embed(
+            title="🎁 Batch Redemption Progress",
+            description=f"**Gift Code{'s' if total_codes > 1 else ''}:** {code_display}\n**Progress:** {completed_alliances}/{total_alliances} alliances\n\n" + "\n".join(lines),
+            color=discord.Color.green() if completed_alliances == total_alliances else discord.Color.blue()
+        )
+        return embed
+
+    async def _update_batch_progress(self, batch_id):
+        """Update the batch progress message."""
+        if batch_id not in self.redemption_batches:
+            return
+
+        batch = self.redemption_batches[batch_id]
+        giftcodes = batch.get('giftcodes', batch.get('giftcode', []))
+        total_codes = batch.get('total_codes', 1)
+        embed = self._build_batch_progress_embed(giftcodes, batch['alliances'], total_codes)
+
+        try:
+            await batch['message'].edit(embed=embed)
+        except Exception as e:
+            self.logger.warning(f"Failed to update batch progress message: {e}")
+
     @commands.Cog.listener()
     async def on_ready(self):
         """
@@ -517,37 +686,86 @@ class GiftOperations(commands.Cog):
             except Exception as log_e:
                 self.logger.exception(f"GiftOps: CRITICAL - Failed to write on_message handler error log: {log_e}")
 
+    async def verify_test_fid(self, fid):
+        """
+        Verify that a ID is valid by attempting to login to the account.
+        
+        Args:
+            fid (str): The ID to verify
+            
+        Returns:
+            tuple: (is_valid, message) where is_valid is a boolean and message is a string
+        """
+        try:
+            self.logger.info(f"Verifying test ID: {fid}")
+            
+            session, response_stove_info = self.get_stove_info_wos(player_id=fid)
+            
+            try:
+                player_info_json = response_stove_info.json()
+            except json.JSONDecodeError:
+                self.logger.error(f"Invalid JSON response when verifying ID {fid}")
+                return False, "Invalid response from server"
+            
+            login_successful = player_info_json.get("msg") == "success"
+            
+            if login_successful:
+                try:
+                    nickname = player_info_json.get("data", {}).get("nickname", "Unknown")
+                    furnace_lv = player_info_json.get("data", {}).get("stove_lv", "Unknown")
+                    self.logger.info(f"Test ID {fid} is valid. Nickname: {nickname}, Level: {furnace_lv}")
+                    return True, "Valid account"
+                except Exception as e:
+                    self.logger.exception(f"Error parsing player info for ID {fid}: {e}")
+                    return True, "Valid account (but error getting details)"
+            else:
+                error_msg = player_info_json.get("msg", "Unknown error")
+                self.logger.info(f"Test ID {fid} is invalid. Error: {error_msg}")
+                return False, f"Login failed: {error_msg}"
+        
+        except Exception as e:
+            self.logger.exception(f"Error verifying test ID {fid}: {e}")
+            return False, f"Verification error: {str(e)}"
+
+    async def update_test_fid(self, new_fid):
+        """
+        Update the test ID in the database.
+        
+        Args:
+            new_fid (str): The new test ID
+            
+        Returns:
+            bool: True if update was successful, False otherwise
+        """
+        try:
+            self.logger.info(f"Updating test ID to: {new_fid}")
+            
+            self.settings_cursor.execute("""
+                INSERT INTO test_fid_settings (test_fid) VALUES (?)
+            """, (new_fid,))
+            self.settings_conn.commit()
+            
+            self.logger.info(f"Test ID updated successfully to {new_fid}")
+            return True
+        
+        except sqlite3.Error as db_err:
+            self.logger.exception(f"Database error updating test ID: {db_err}")
+            return False
+        except Exception as e:
+            self.logger.exception(f"Unexpected error updating test ID: {e}")
+            return False
 
     def get_test_fid(self):
         """
-        Get the best available ID for testing/validation.
-        
-        Priority:
-        1. Random alliance member ID (if any exist)
-        2. Default ID (27370737) as fallback
+        Get the current test ID from the database.
         
         Returns:
-            str: The ID to use for testing
+            str: The current test ID, or the default "244886619" if not found
         """
         try:
-            # First try: Use a random alliance member
-            with sqlite3.connect('db/users.sqlite') as users_conn:
-                users_cursor = users_conn.cursor()
-                users_cursor.execute("""
-                    SELECT fid FROM users 
-                    WHERE alliance IS NOT NULL AND alliance != '' 
-                    ORDER BY RANDOM() 
-                    LIMIT 1
-                """)
-                member = users_cursor.fetchone()
-                
-                if member:
-                    fid = member[0]
-                    return fid
-            
-            # Fallback: Use default ID
-            return "27370737"
-            
+            self.settings_cursor.execute("SELECT test_fid FROM test_fid_settings ORDER BY id DESC LIMIT 1")
+            result = self.settings_cursor.fetchone()
+            return result[0] if result else "244886619"
         except Exception as e:
             self.logger.exception(f"Error getting test ID: {e}")
             return "27370737"
@@ -861,8 +1079,8 @@ class GiftOperations(commands.Cog):
             self.logger.error(f"[SIGN ERROR] Response: {response_json_redeem}")
         elif msg == "STOVE_LV ERROR" and err_code == 40006:
             status = "TOO_SMALL_SPEND_MORE"
-            self.logger.error(f"[FURNACE LVL ERROR] Furnace level is too low for ID {player_id}, code {giftcode}")
-            self.logger.error(f"[FURNACE LVL ERROR] Response: {response_json_redeem}")
+            self.logger.error(f"[TC LVL ERROR] Town Center level is too low for ID {player_id}, code {giftcode}")
+            self.logger.error(f"[TC LVL ERROR] Response: {response_json_redeem}")
         elif msg == "RECHARGE_MONEY ERROR" and err_code == 40017:
             status = "TOO_POOR_SPEND_MORE"
             self.logger.error(f"[VIP LEVEL ERROR] VIP level is too low for ID {player_id}, code {giftcode}")
@@ -1339,20 +1557,66 @@ class GiftOperations(commands.Cog):
                         
                         elif status in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE", "TOO_SMALL_SPEND_MORE", "TOO_POOR_SPEND_MORE"]:
                             codes_still_valid += 1
-                            
-                            # Update to validated if it was pending
+
                             if current_status == 'pending':
                                 self.logger.info(f"GiftOps: Code '{giftcode}' confirmed valid. Updating status to 'validated'.")
                                 self.cursor.execute("UPDATE gift_codes SET validation_status = 'validated' WHERE giftcode = ? AND validation_status = 'pending'", (giftcode,))
                                 self.conn.commit()
-                                
-                                # Send to API if newly validated
+
                                 if hasattr(self, 'api') and self.api:
                                     asyncio.create_task(self.api.add_giftcode(giftcode))
+
+                                try:
+                                    await self._execute_with_retry(
+                                        lambda: self.cursor.execute("SELECT alliance_id FROM giftcodecontrol WHERE status = 1 ORDER BY priority ASC, alliance_id ASC")
+                                    )
+                                    auto_alliances = self.cursor.fetchall() or []
+                                except sqlite3.OperationalError as e:
+                                    error_msg = f"Auto-alliance query failed after retries for code '{giftcode}': {e}"
+                                    self.logger.error(error_msg)
+                                    print(f"ERROR: {error_msg}")
+                                    auto_alliances = []
+                                except Exception as e:
+                                    error_msg = f"Unexpected error in auto-alliance query for code '{giftcode}': {e}"
+                                    self.logger.error(error_msg)
+                                    print(f"ERROR: {error_msg}")
+                                    auto_alliances = []
+
+                                if auto_alliances:
+                                    self.logger.info(f"GiftOps: Triggering delayed auto-redemption for code '{giftcode}' to {len(auto_alliances)} alliances")
+
+                                    for alliance in auto_alliances:
+                                        try:
+                                            await self.add_to_validation_queue(
+                                                giftcode=giftcode,
+                                                source='periodic-auto',
+                                                operation_type='redemption',
+                                                alliance_id=alliance[0],
+                                                interaction=None
+                                            )
+                                        except Exception as e:
+                                            self.logger.exception(f"Error queueing delayed auto-redemption for code {giftcode} to alliance {alliance[0]}: {e}")
+
+                                    self.settings_cursor.execute("SELECT id FROM admin WHERE is_initial = 1")
+                                    admin_ids = [row[0] for row in self.settings_cursor.fetchall()]
+
+                                    for admin_id in admin_ids:
+                                        try:
+                                            admin_user = await self.bot.fetch_user(admin_id)
+                                            if admin_user:
+                                                embed = discord.Embed(
+                                                    title="✅ Auto-Redemption Started",
+                                                    description=f"Code `{giftcode}` has been validated and auto-redemption is now starting for {len(auto_alliances)} alliance(s).",
+                                                    color=discord.Color.green(),
+                                                    timestamp=datetime.now()
+                                                )
+                                                await admin_user.send(embed=embed)
+                                        except Exception as e:
+                                            self.logger.exception(f"Error notifying admin {admin_id} about delayed auto-redemption: {e}")
                         
                         else:
                             self.logger.info(f"GiftOps: Code '{giftcode}' returned status '{status}' during periodic validation.")
-                            
+
                         # Wait between validations to avoid rate limiting
                         await asyncio.sleep(random.uniform(30.0, 60.0))
                         
@@ -1375,6 +1639,83 @@ class GiftOperations(commands.Cog):
         self.logger.info("GiftOps: Waiting for bot to be ready before starting periodic_validation_loop...")
         await self.bot.wait_until_ready()
         self.logger.info("GiftOps: Bot is ready, periodic_validation_loop will start.")
+    async def show_redemption_priority(self, interaction: discord.Interaction):
+        """Show the redemption priority management interface (global admin only)."""
+        try:
+            # Check global admin permission
+            self.settings_cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (interaction.user.id,))
+            admin_info = self.settings_cursor.fetchone()
+
+            if not admin_info or admin_info[0] != 1:
+                error_msg = "Only global admins can manage redemption priority."
+                if interaction.response.is_done():
+                    await interaction.followup.send(error_msg, ephemeral=True)
+                else:
+                    await interaction.response.send_message(error_msg, ephemeral=True)
+                return
+
+            # Get all alliances with their priority info
+            self.alliance_cursor.execute("SELECT alliance_id, name FROM alliance_list ORDER BY alliance_id")
+            all_alliances = self.alliance_cursor.fetchall()
+
+            if not all_alliances:
+                error_msg = "No alliances found."
+                if interaction.response.is_done():
+                    await interaction.followup.send(error_msg, ephemeral=True)
+                else:
+                    await interaction.response.send_message(error_msg, ephemeral=True)
+                return
+
+            # Get priority info for alliances
+            alliance_ids = [a[0] for a in all_alliances]
+            placeholders = ','.join('?' * len(alliance_ids))
+            self.cursor.execute(f"""
+                SELECT alliance_id, priority FROM giftcodecontrol
+                WHERE alliance_id IN ({placeholders})
+            """, alliance_ids)
+            priority_data = {row[0]: row[1] for row in self.cursor.fetchall()}
+
+            # Build alliance list with priorities
+            alliances_with_priority = []
+            for alliance_id, name in all_alliances:
+                priority = priority_data.get(alliance_id, 0)
+                alliances_with_priority.append((alliance_id, name, priority))
+
+            # Sort by priority, then by alliance_id
+            alliances_with_priority.sort(key=lambda x: (x[2], x[0]))
+
+            # Create embed
+            embed = discord.Embed(
+                title="📊 Redemption Priority",
+                description="Configure the order in which alliances receive gift codes.\nSelect an alliance and use the buttons to change its position.",
+                color=discord.Color.blue()
+            )
+
+            # Build priority list
+            priority_list = []
+            for idx, (alliance_id, name, priority) in enumerate(alliances_with_priority, 1):
+                priority_list.append(f"`{idx}.` **{name}**")
+
+            embed.add_field(
+                name="Current Priority Order",
+                value="\n".join(priority_list) if priority_list else "No alliances configured",
+                inline=False
+            )
+
+            view = RedemptionPriorityView(self, alliances_with_priority)
+
+            if interaction.response.is_done():
+                await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+            else:
+                await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+        except Exception as e:
+            self.logger.exception(f"Error in show_redemption_priority: {e}")
+            error_msg = f"An error occurred: {str(e)}"
+            if interaction.response.is_done():
+                await interaction.followup.send(error_msg, ephemeral=True)
+            else:
+                await interaction.response.send_message(error_msg, ephemeral=True)
 
     async def validate_gift_codes(self):
         try:
@@ -1708,19 +2049,25 @@ class GiftOperations(commands.Cog):
         gift_menu_embed = discord.Embed(
             title="🎁 Gift Code Operations",
             description=(
-                "Please select an operation:\n\n"
+                "Here you can manage everything related to gift code redemption.\n\n"
+                "The bot automatically retrieves new gift codes from our distribution API. "
+                "Codes are validated periodically, and automatically removed if they become invalid.\n\n"
+                "If you're new here, you'll want to head to **Settings** and configure some things:\n"
+                "- If you want codes to be automatically redeemed, go to **Auto Redemption** and enable it.\n"
+                "- You can set up a channel via **Channel Management** where the bot will scan for new codes.\n"
+                "- You can also adjust the order in which alliances redeem gift codes via **Redemption Priority**.\n\n"
                 "**Available Operations**\n"
                 "━━━━━━━━━━━━━━━━━━━━━━\n"
                 "🎫 **Add Gift Code**\n"
-                "└ Input a new gift code\n\n"
+                "└ Manually input a new gift code\n\n"
                 "📋 **List Gift Codes**\n"
                 "└ View all active, valid codes\n\n"
+                "🎯 **Redeem Gift Code**\n"
+                "└ Redeem gift code(s) for one or more alliances\n\n"
+                "⚙️ **Settings**\n"
+                "└ Set up a gift code channel, configure auto redemption, and more...\n\n"
                 "❌ **Delete Gift Code**\n"
-                "└ Remove existing codes\n\n"
-                "🎯 **Use Gift Code for Alliance**\n"
-                "└ Redeem a gift code for one or more alliances\n\n"
-                "⚙️ **Gift Code Settings**\n"
-                "└ Configure automatic gift code usage\n"
+                "└ Remove existing codes (rarely needed)\n"
                 "━━━━━━━━━━━━━━━━━━━━━━"
             ),
             color=discord.Color.gold()
@@ -2305,8 +2652,10 @@ class GiftOperations(commands.Cog):
                 "└ Set up and manage the channel(s) where the bot scans for new codes\n\n"
                 "🎁 **Automatic Redemption**\n"
                 "└ Enable/disable auto-redemption of new valid gift codes\n\n"
+                "🔢 **Redemption Priority**\n"
+                "└ Change the order in which alliances auto-redeem new gift codes\n\n"
                 "🔍 **Channel History Scan**\n"
-                "└ Trigger an on-demand scan of existing messages in a gift channel\n\n"
+                "└ Scan for gift codes in existing messages in a gift channel\n\n"
                 "🗑️ **Clear Redemption Cache**\n"
                 "└ Clear the cached gift code redemption results\n"
                 "━━━━━━━━━━━━━━━━━━━━━━"
@@ -2365,7 +2714,11 @@ class GiftOperations(commands.Cog):
                 if alliance_id in alliance_names:
                     alliance_name = alliance_names[alliance_id]
                     channel = self.bot.get_channel(channel_id)
-                    channel_name = f"<#{channel_id}>" if channel else f"Unknown Channel ({channel_id})"
+                    # Avoid nested f-strings for Python 3.9+ compatibility
+                    if channel:
+                        channel_name = f"<#{channel_id}>"
+                    else:
+                        channel_name = f"Unknown Channel ({channel_id})"
                     configured_text += f"🏰 **{alliance_name}**\n📢 Channel: {channel_name}\n\n"
             
             if configured_text:
@@ -2705,8 +3058,12 @@ class GiftOperations(commands.Cog):
         for alliance_id, channel_id in accessible_configs:
             alliance_name = alliance_names[alliance_id]
             channel = self.bot.get_channel(channel_id)
-            channel_display = f"#{channel.name}" if channel else f"Unknown Channel ({channel_id})"
-            
+            # Avoid nested f-strings for Python 3.9+ compatibility
+            if channel:
+                channel_display = f"#{channel.name}"
+            else:
+                channel_display = f"Unknown Channel ({channel_id})"
+
             alliance_options.append(discord.SelectOption(
                 label=alliance_name,
                 value=str(alliance_id),
@@ -2931,17 +3288,33 @@ class GiftOperations(commands.Cog):
                 
                 if selected_value in ["enable_all", "disable_all"]:
                     status = 1 if selected_value == "enable_all" else 0
-                    
+
                     for alliance_id, _, _ in alliances_with_counts:
-                        self.cursor.execute(
-                            """
-                            INSERT INTO giftcodecontrol (alliance_id, status) 
-                            VALUES (?, ?) 
-                            ON CONFLICT(alliance_id) 
-                            DO UPDATE SET status = excluded.status
-                            """,
-                            (alliance_id, status)
-                        )
+                        if status == 1:
+                            # When enabling, assign next available priority
+                            self.cursor.execute("SELECT COALESCE(MAX(priority), 0) + 1 FROM giftcodecontrol")
+                            next_priority = self.cursor.fetchone()[0]
+                            self.cursor.execute(
+                                """
+                                INSERT INTO giftcodecontrol (alliance_id, status, priority)
+                                VALUES (?, ?, ?)
+                                ON CONFLICT(alliance_id)
+                                DO UPDATE SET status = excluded.status,
+                                    priority = CASE WHEN giftcodecontrol.priority = 0 THEN excluded.priority ELSE giftcodecontrol.priority END
+                                """,
+                                (alliance_id, status, next_priority)
+                            )
+                        else:
+                            # When disabling, keep existing priority
+                            self.cursor.execute(
+                                """
+                                INSERT INTO giftcodecontrol (alliance_id, status)
+                                VALUES (?, ?)
+                                ON CONFLICT(alliance_id)
+                                DO UPDATE SET status = excluded.status
+                                """,
+                                (alliance_id, status)
+                            )
                     self.conn.commit()
 
                     status_text = "enabled" if status == 1 else "disabled"
@@ -2987,16 +3360,32 @@ class GiftOperations(commands.Cog):
                 async def button_callback(button_interaction: discord.Interaction):
                     try:
                         status = 1 if button_interaction.data['custom_id'] == "confirm" else 0
-                        
-                        self.cursor.execute(
-                            """
-                            INSERT INTO giftcodecontrol (alliance_id, status) 
-                            VALUES (?, ?) 
-                            ON CONFLICT(alliance_id) 
-                            DO UPDATE SET status = excluded.status
-                            """,
-                            (alliance_id, status)
-                        )
+
+                        if status == 1:
+                            # When enabling, assign next available priority
+                            self.cursor.execute("SELECT COALESCE(MAX(priority), 0) + 1 FROM giftcodecontrol")
+                            next_priority = self.cursor.fetchone()[0]
+                            self.cursor.execute(
+                                """
+                                INSERT INTO giftcodecontrol (alliance_id, status, priority)
+                                VALUES (?, ?, ?)
+                                ON CONFLICT(alliance_id)
+                                DO UPDATE SET status = excluded.status,
+                                    priority = CASE WHEN giftcodecontrol.priority = 0 THEN excluded.priority ELSE giftcodecontrol.priority END
+                                """,
+                                (alliance_id, status, next_priority)
+                            )
+                        else:
+                            # When disabling, keep existing priority
+                            self.cursor.execute(
+                                """
+                                INSERT INTO giftcodecontrol (alliance_id, status)
+                                VALUES (?, ?)
+                                ON CONFLICT(alliance_id)
+                                DO UPDATE SET status = excluded.status
+                                """,
+                                (alliance_id, status)
+                            )
                         self.conn.commit()
 
                         status_text = "enabled" if status == 1 else "disabled"
@@ -3223,7 +3612,7 @@ class GiftOperations(commands.Cog):
                         # Define user-friendly messages for each error type
                         error_descriptions = {
                             "TOO_POOR_SPEND_MORE": "💸 **{count}** members failed to spend enough to reach VIP12.",
-                            "TOO_SMALL_SPEND_MORE": "🔥 **{count}** members failed due to insufficient furnace level.",
+                            "TOO_SMALL_SPEND_MORE": "🔥 **{count}** members failed due to insufficient Town Center level.",
                             "TIMEOUT_RETRY": "⏱️ **{count}** members were staring into the void, until the void finally timed out on them.",
                             "LOGIN_EXPIRED_MID_PROCESS": "🔒 **{count}** members login failed mid-process. How'd that even happen?",
                             "LOGIN_FAILED": "🔐 **{count}** members failed due to login issues. Try logging it off and on again!",
@@ -3676,16 +4065,6 @@ class GiftView(discord.ui.View):
         await self.cog.create_gift_code(interaction)
         
     @discord.ui.button(
-        label="Gift Code Settings",
-        style=discord.ButtonStyle.secondary,
-        custom_id="gift_code_settings",
-        emoji="⚙️",
-        row=1
-    )
-    async def gift_code_settings_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.show_settings_menu(interaction)
-
-    @discord.ui.button(
         label="List Gift Codes",
         style=discord.ButtonStyle.blurple,
         custom_id="list_gift",
@@ -3696,28 +4075,11 @@ class GiftView(discord.ui.View):
         await self.cog.list_gift_codes(interaction)
 
     @discord.ui.button(
-        label="Delete Gift Code",
-        emoji="🗑️",
-        style=discord.ButtonStyle.danger,
-        custom_id="delete_gift",
-        row=0
-    )
-    async def delete_gift_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            await self.cog.delete_gift_code(interaction)
-        except Exception as e:
-            self.logger.exception(f"Delete gift button error: {e}")
-            await interaction.response.send_message(
-                "❌ An error occurred while processing delete request.",
-                ephemeral=True
-            )
-
-    @discord.ui.button(
-        label="Use Gift Code for Alliance",
+        label="Redeem Gift Code",
         emoji="🎯",
         style=discord.ButtonStyle.primary,
         custom_id="use_gift_alliance",
-        row=1
+        row=0
     )
     async def use_gift_alliance_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -3750,7 +4112,7 @@ class GiftView(discord.ui.View):
                     alliances_with_counts.append((alliance_id, name, member_count))
 
             alliance_embed = discord.Embed(
-                title="🎯 Use Gift Code for Alliance",
+                title="🎯 Redeem Gift Code",
                 description=(
                     "Select an alliance to use gift code:\n\n"
                     "**Alliance List**\n"
@@ -3761,7 +4123,7 @@ class GiftView(discord.ui.View):
             )
 
             view = AllianceSelectView(alliances_with_counts, self.cog)
-            
+
             view.current_select.options.insert(0, discord.SelectOption(
                 label="ALL ALLIANCES",
                 value="all",
@@ -3772,9 +4134,20 @@ class GiftView(discord.ui.View):
             async def alliance_callback(select_interaction: discord.Interaction):
                 try:
                     selected_value = view.current_select.values[0]
-                    
+
                     if selected_value == "all":
-                        all_alliances = [aid for aid, name, _ in alliances_with_counts]
+                        # Get alliances ordered by priority
+                        alliance_ids = [aid for aid, _, _ in alliances_with_counts]
+                        placeholders = ','.join('?' * len(alliance_ids))
+                        self.cog.cursor.execute(f"""
+                            SELECT alliance_id FROM giftcodecontrol
+                            WHERE alliance_id IN ({placeholders})
+                            ORDER BY priority ASC, alliance_id ASC
+                        """, alliance_ids)
+                        prioritized = [row[0] for row in self.cog.cursor.fetchall()]
+                        # Add any alliances not in giftcodecontrol at the end, ordered by ID
+                        remaining = sorted([aid for aid in alliance_ids if aid not in prioritized])
+                        all_alliances = prioritized + remaining
                     else:
                         alliance_id = int(selected_value)
                         all_alliances = [alliance_id]
@@ -3817,18 +4190,38 @@ class GiftView(discord.ui.View):
                         ]
                     )
 
+                    # Add ALL CODES option at the beginning
+                    select_giftcode.options.insert(0, discord.SelectOption(
+                        label="ALL CODES",
+                        value="all_codes",
+                        description=f"Redeem all {len(gift_codes)} active codes",
+                        emoji="📦"
+                    ))
+
                     async def giftcode_callback(giftcode_interaction: discord.Interaction):
                         try:
-                            selected_code = giftcode_interaction.data["values"][0]
-                            
+                            selected_code_value = giftcode_interaction.data["values"][0]
+
+                            # Handle ALL CODES selection
+                            if selected_code_value == "all_codes":
+                                selected_codes = [code for code, date in gift_codes]
+                                code_display = f"ALL ({len(selected_codes)} codes)"
+                            else:
+                                selected_codes = [selected_code_value]
+                                code_display = f"`{selected_code_value}`"
+
+                            alliance_display = 'ALL' if selected_value == 'all' else next((name for aid, name, _ in alliances_with_counts if aid == alliance_id), 'Unknown')
+                            total_redemptions = len(selected_codes) * len(all_alliances)
+
                             confirm_embed = discord.Embed(
                                 title="⚠️ Confirm Gift Code Usage",
                                 description=(
-                                    f"Are you sure you want to use this gift code?\n\n"
+                                    f"Are you sure you want to use {'these gift codes' if len(selected_codes) > 1 else 'this gift code'}?\n\n"
                                     f"**Details**\n"
                                     f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                                    f"🎁 **Gift Code:** `{selected_code}`\n"
-                                    f"🏰 **Alliances:** {'ALL' if selected_value == 'all' else next((name for aid, name, _ in alliances_with_counts if aid == alliance_id), 'Unknown')}\n"
+                                    f"🎁 **Gift Code{'s' if len(selected_codes) > 1 else ''}:** {code_display}\n"
+                                    f"🏰 **Alliances:** {alliance_display} ({len(all_alliances)})\n"
+                                    f"📊 **Total redemptions:** {total_redemptions}\n"
                                     f"━━━━━━━━━━━━━━━━━━━━━━\n"
                                 ),
                                 color=discord.Color.yellow()
@@ -3838,42 +4231,46 @@ class GiftView(discord.ui.View):
                             
                             async def confirm_callback(button_interaction: discord.Interaction):
                                 try:
+                                    # Defer first so followup.send works for batch progress
+                                    await button_interaction.response.defer()
+
                                     await self.cog.add_manual_redemption_to_queue(
-                                        selected_code, all_alliances, button_interaction
+                                        selected_codes, all_alliances, button_interaction
                                     )
-                                    
+
                                     queue_status = await self.cog.get_queue_status()
-                                    
+
                                     alliance_names = []
                                     for aid in all_alliances[:3]:  # Show first 3 alliance names
                                         name = next((n for a_id, n, _ in alliances_with_counts if a_id == aid), 'Unknown')
                                         alliance_names.append(name)
-                                    
+
                                     alliance_list = ", ".join(alliance_names)
                                     if len(all_alliances) > 3:
                                         alliance_list += f" and {len(all_alliances) - 3} more"
-                                    
+
                                     queue_summary = []
                                     your_position = None
-                                    
+
                                     for code, items in queue_status['queue_by_code'].items():
                                         alliance_count = len([i for i in items if i.get('alliance_id')])
-                                        
-                                        if code == selected_code and your_position is None:
+
+                                        if code in selected_codes and your_position is None:
                                             your_position = min(i['position'] for i in items)
-                                        
+
                                         queue_summary.append(f"• `{code}` - {alliance_count} alliance{'s' if alliance_count != 1 else ''}")
-                                    
+
                                     queue_info = "\n".join(queue_summary) if queue_summary else "Queue is empty"
-                                    
+
                                     queue_embed = discord.Embed(
                                         title="✅ Redemptions Queued Successfully",
                                         description=(
                                             f"Gift code redemptions added to the queue.\n\n"
                                             f"**Your Redemption**\n"
                                             f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                                            f"🎁 **Gift Code:** `{selected_code}`\n"
+                                            f"🎁 **Gift Code{'s' if len(selected_codes) > 1 else ''}:** {code_display}\n"
                                             f"🏰 **Alliances:** {alliance_list}\n"
+                                            f"📊 **Total redemptions:** {len(selected_codes) * len(all_alliances)}\n"
                                             f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
                                             f"**Full Queue Details**\n"
                                             f"{queue_info}\n\n"
@@ -3884,15 +4281,15 @@ class GiftView(discord.ui.View):
                                         color=discord.Color.green()
                                     )
                                     queue_embed.set_footer(text="Gift codes are processed sequentially to prevent issues.")
-                                    
-                                    await button_interaction.response.edit_message(
+
+                                    await button_interaction.edit_original_response(
                                         embed=queue_embed,
                                         view=None
                                     )
 
                                 except Exception as e:
                                     self.logger.exception(f"Error queueing gift code redemptions: {e}")
-                                    await button_interaction.response.send_message(
+                                    await button_interaction.followup.send(
                                         "❌ An error occurred while queueing the gift code redemptions.",
                                         ephemeral=True
                                     )
@@ -3910,18 +4307,16 @@ class GiftView(discord.ui.View):
 
                             confirm_button = discord.ui.Button(
                                 label="Confirm",
-                                emoji="✅",
                                 style=discord.ButtonStyle.success,
-                                custom_id="confirm"
+                                emoji="✅"
                             )
-                            confirm_button.callback = confirm_callback
-
                             cancel_button = discord.ui.Button(
                                 label="Cancel",
-                                emoji="❌",
                                 style=discord.ButtonStyle.danger,
-                                custom_id="cancel"
+                                emoji="❌"
                             )
+
+                            confirm_button.callback = confirm_callback
                             cancel_button.callback = cancel_callback
 
                             confirm_view.add_item(confirm_button)
@@ -3931,60 +4326,65 @@ class GiftView(discord.ui.View):
                                 embed=confirm_embed,
                                 view=confirm_view
                             )
-
                         except Exception as e:
-                            self.logger.exception(f"Error in gift code selection: {e}")
-                            if not giftcode_interaction.response.is_done():
-                                await giftcode_interaction.response.send_message(
-                                    "❌ An error occurred while processing your selection.",
-                                    ephemeral=True
-                                )
-                            else:
-                                await giftcode_interaction.followup.send(
-                                    "❌ An error occurred while processing your selection.",
-                                    ephemeral=True
-                                )
+                            self.logger.exception(f"Gift code callback error: {e}")
+                            await giftcode_interaction.response.send_message(
+                                "❌ An error occurred while processing the gift code.",
+                                ephemeral=True
+                            )
 
                     select_giftcode.callback = giftcode_callback
                     giftcode_view = discord.ui.View()
                     giftcode_view.add_item(select_giftcode)
 
-                    if not select_interaction.response.is_done():
-                        await select_interaction.response.edit_message(
-                            embed=giftcode_embed,
-                            view=giftcode_view
-                        )
-                    else:
-                        await select_interaction.message.edit(
-                            embed=giftcode_embed,
-                            view=giftcode_view
-                        )
-
+                    await select_interaction.response.edit_message(
+                        embed=giftcode_embed,
+                        view=giftcode_view
+                    )
                 except Exception as e:
-                    self.logger.exception(f"Error in alliance selection: {e}")
-                    if not select_interaction.response.is_done():
-                        await select_interaction.response.send_message(
-                            "❌ An error occurred while processing your selection.",
-                            ephemeral=True
-                        )
-                    else:
-                        await select_interaction.followup.send(
-                            "❌ An error occurred while processing your selection.",
-                            ephemeral=True
-                        )
+                    self.logger.exception(f"Alliance callback error: {e}")
+                    await select_interaction.response.send_message(
+                        "❌ An error occurred while processing the alliance selection.",
+                        ephemeral=True
+                    )
 
-            view.callback = alliance_callback
-
+            view.current_select.callback = alliance_callback
             await interaction.response.send_message(
                 embed=alliance_embed,
                 view=view,
                 ephemeral=True
             )
-
         except Exception as e:
-            self.logger.exception(f"Error in use_gift_alliance_button: {str(e)}")
+            self.logger.exception(f"Use gift alliance button error: {e}")
             await interaction.response.send_message(
                 "❌ An error occurred while processing the request.",
+                ephemeral=True
+            )
+
+    @discord.ui.button(
+        label="Settings",
+        style=discord.ButtonStyle.secondary,
+        custom_id="gift_code_settings",
+        emoji="⚙️",
+        row=1
+    )
+    async def gift_code_settings_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.show_settings_menu(interaction)
+
+    @discord.ui.button(
+        label="Delete Gift Code",
+        emoji="🗑️",
+        style=discord.ButtonStyle.danger,
+        custom_id="delete_gift",
+        row=1
+    )
+    async def delete_gift_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            await self.cog.delete_gift_code(interaction)
+        except Exception as e:
+            self.logger.exception(f"Delete gift button error: {e}")
+            await interaction.response.send_message(
+                "❌ An error occurred while processing delete request.",
                 ephemeral=True
             )
 
@@ -4031,7 +4431,17 @@ class SettingsMenuView(discord.ui.View):
     )
     async def auto_gift_settings_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.setup_giftcode_auto(interaction)
-    
+
+    @discord.ui.button(
+        label="Redemption Priority",
+        style=discord.ButtonStyle.primary,
+        custom_id="redemption_priority",
+        emoji="📊",
+        row=0
+    )
+    async def redemption_priority_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.show_redemption_priority(interaction)
+
     @discord.ui.button(
         label="Channel History Scan",
         style=discord.ButtonStyle.secondary,
@@ -4097,6 +4507,162 @@ class SettingsMenuView(discord.ui.View):
     )
     async def back_to_main_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_gift_menu(interaction)
+
+class RedemptionPriorityView(discord.ui.View):
+    def __init__(self, cog, alliances_with_priority):
+        super().__init__(timeout=7200)
+        self.cog = cog
+        self.alliances = alliances_with_priority  # List of (alliance_id, name, priority)
+        self.selected_alliance_id = None
+
+        # Alliance select menu
+        options = [
+            discord.SelectOption(
+                label=f"{idx}. {name}",
+                value=str(alliance_id),
+                description=f"Priority position {idx}"
+            )
+            for idx, (alliance_id, name, _) in enumerate(self.alliances, 1)
+        ]
+
+        if options:
+            self.alliance_select = discord.ui.Select(
+                placeholder="Select an alliance to move",
+                options=options[:25],  # Discord limit
+                row=0
+            )
+            self.alliance_select.callback = self.alliance_select_callback
+            self.add_item(self.alliance_select)
+
+    async def alliance_select_callback(self, interaction: discord.Interaction):
+        self.selected_alliance_id = int(self.alliance_select.values[0])
+
+        # Update embed to show selected alliance with marker
+        embed = discord.Embed(
+            title="📊 Redemption Priority",
+            description="Configure the order in which alliances receive gift codes.\nSelect an alliance and use the buttons to change its position.",
+            color=discord.Color.blue()
+        )
+
+        priority_list = []
+        for idx, (alliance_id, name, _) in enumerate(self.alliances, 1):
+            marker = " ◀" if alliance_id == self.selected_alliance_id else ""
+            priority_list.append(f"`{idx}.` **{name}**{marker}")
+
+        embed.add_field(
+            name="Current Priority Order",
+            value="\n".join(priority_list) if priority_list else "No alliances configured",
+            inline=False
+        )
+
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="Move Up", style=discord.ButtonStyle.primary, emoji="⬆️", row=1)
+    async def move_up_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.selected_alliance_id:
+            await interaction.response.send_message("Please select an alliance first.", ephemeral=True)
+            return
+
+        # Find current position
+        current_idx = next((i for i, (aid, _, _) in enumerate(self.alliances) if aid == self.selected_alliance_id), None)
+        if current_idx is None or current_idx == 0:
+            await interaction.response.send_message("Alliance is already at the top.", ephemeral=True)
+            return
+
+        # Swap with the alliance above
+        await self._swap_priorities(current_idx, current_idx - 1)
+        await self._refresh_view(interaction)
+
+    @discord.ui.button(label="Move Down", style=discord.ButtonStyle.primary, emoji="⬇️", row=1)
+    async def move_down_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.selected_alliance_id:
+            await interaction.response.send_message("Please select an alliance first.", ephemeral=True)
+            return
+
+        # Find current position
+        current_idx = next((i for i, (aid, _, _) in enumerate(self.alliances) if aid == self.selected_alliance_id), None)
+        if current_idx is None or current_idx >= len(self.alliances) - 1:
+            await interaction.response.send_message("Alliance is already at the bottom.", ephemeral=True)
+            return
+
+        # Swap with the alliance below
+        await self._swap_priorities(current_idx, current_idx + 1)
+        await self._refresh_view(interaction)
+
+    @discord.ui.button(label="Done", style=discord.ButtonStyle.secondary, emoji="✅", row=1)
+    async def done_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title="📊 Priority Updated",
+                description="Redemption priority order has been saved.",
+                color=discord.Color.green()
+            ),
+            view=None
+        )
+
+    async def _swap_priorities(self, idx1, idx2):
+        """Swap the priorities of two alliances in the list and database."""
+        alliance1_id, name1, priority1 = self.alliances[idx1]
+        alliance2_id, name2, priority2 = self.alliances[idx2]
+
+        # Assign new sequential priorities based on position
+        new_priority1 = idx2 + 1
+        new_priority2 = idx1 + 1
+
+        # Update database
+        self.cog.cursor.execute("""
+            INSERT INTO giftcodecontrol (alliance_id, status, priority)
+            VALUES (?, 0, ?)
+            ON CONFLICT(alliance_id) DO UPDATE SET priority = excluded.priority
+        """, (alliance1_id, new_priority1))
+
+        self.cog.cursor.execute("""
+            INSERT INTO giftcodecontrol (alliance_id, status, priority)
+            VALUES (?, 0, ?)
+            ON CONFLICT(alliance_id) DO UPDATE SET priority = excluded.priority
+        """, (alliance2_id, new_priority2))
+
+        self.cog.conn.commit()
+
+        # Swap in local list
+        self.alliances[idx1] = (alliance1_id, name1, new_priority1)
+        self.alliances[idx2] = (alliance2_id, name2, new_priority2)
+        self.alliances[idx1], self.alliances[idx2] = self.alliances[idx2], self.alliances[idx1]
+
+    async def _refresh_view(self, interaction: discord.Interaction):
+        """Refresh the embed and view after a priority change."""
+        # Rebuild embed
+        embed = discord.Embed(
+            title="📊 Redemption Priority",
+            description="Configure the order in which alliances receive gift codes.\nSelect an alliance and use the buttons to change its position.",
+            color=discord.Color.blue()
+        )
+
+        priority_list = []
+        for idx, (alliance_id, name, _) in enumerate(self.alliances, 1):
+            marker = " ◀" if alliance_id == self.selected_alliance_id else ""
+            priority_list.append(f"`{idx}.` **{name}**{marker}")
+
+        embed.add_field(
+            name="Current Priority Order",
+            value="\n".join(priority_list) if priority_list else "No alliances configured",
+            inline=False
+        )
+
+        # Rebuild select options
+        options = [
+            discord.SelectOption(
+                label=f"{idx}. {name}",
+                value=str(alliance_id),
+                description=f"Priority position {idx}"
+            )
+            for idx, (alliance_id, name, _) in enumerate(self.alliances, 1)
+        ]
+
+        if options:
+            self.alliance_select.options = options[:25]
+
+        await interaction.response.edit_message(embed=embed, view=self)
 
 class ClearCacheConfirmView(discord.ui.View):
     def __init__(self, parent_cog):

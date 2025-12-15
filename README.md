@@ -22,8 +22,7 @@ We have a list of known working VPS providers below that you could also check ou
 
 | Provider       | URL                                | Notes                                 |
 |----------------|------------------------------------|---------------------------------------|
-| ikketim        | https://panel.ikketim.nl/          | Free, recommended, and supported by one of our community MVPs. Contact ikketim on Discord to get set up with the hosting. |
-| SillyDev       | https://sillydev.co.uk/            | Free tier. Earn credits through ads to maintain. |
+| **ikketim**        | **https://panel.ikketim.nl/**          | **Free, recommended, and supported by our community. Ask on https://ikketim.nl/discord Discord to get started.** |
 | Bot-Hosting    | https://bot-hosting.net/           | Free tier. Requires earning coins though CAPTCHA / ads to maintain. |
 | Lunes          | https://lunes.host/                | Free tier with barely enough capacity to run the latest version of the bot. Least recommended host out of the list here. |
 
@@ -140,7 +139,10 @@ Numerous flags are available that can be used to adjust how the bot runs. These 
 |-------------|---------------------------------|
 | `--autoupdate` | Automatically updates the bot on reboot if an update is found. Useful for headless installs. Used automatically if a container environment is detected.
 | `--beta` | Pulls the latest code from the repository on startup (instead of checking for new releases). **This runs unstable code:** Use at your own risk!
+| `--no-venv` | Skips the requirement to use a virtual environment. **Dependency conflicts may arise** - you have been warned!
 | `--no-update` | Skips the bot's update check, even in container/CI environment. Mutually exclusive with `--autoupdate` and overrides it.
+| `--debug` | Additional output for debugging purposes, particularly when requirements installation fails.
+| `--verbose` | Same as `--debug` above.
 | `--repair` | Attempt to repair the installation by forcing an update to fix any missing files. Works with `--beta` as well.
 
 ## 🌟 Features
@@ -191,6 +193,143 @@ To run with automatic updates (for non-interactive environments):
 ```bash
 python main.py --autoupdate
 ```
+
+## 🛠️ Version v1.4.0 (Releasing Shortly...)
+
+### Bot Core
+- Graceful shutdown with Ctrl+C handling implemented (no more confusing exit tracebacks)
+- Member list Import/Export added (CSV & TSV support, incl. IDs and other parameters)
+  - Exports are sent via DM with fallback to ephemeral in-channel
+- “FID” removed from UI, now consistently labeled “ID”
+- Bot Operations > Control Settings:
+  - Toggle member removal on transfer
+  - Optional notification on removal
+- Documentation moved from README to Wiki
+- Docker image has been set up and auto-builds via CI on release
+- Various Docker deployment improvements and fixes (because Dom loves Docker 🐳)
+
+### Attendance
+- Attendance marking has a new Multi-select UI (much faster to use)
+- Added support for Legion selection to properly track past attendance
+  - Edit attendance sessions manually and set to the correct Legion
+- Added list sorting by:
+  - Score
+  - Name (All / Present-first / Absent-first)
+  - Last Attendance
+- New Sort Order settings menu
+- Added “Post to Channel” for easy attendance report sharing
+- Fixed Arabic name display in text-based reports
+- Fixed report generation errors
+
+### Alliance
+- View Members list now shows ID and State
+- Unified manual alliance control (single & multi-alliance)
+- Added Multi-select UI for:
+  - Member transfers
+  - Member removals
+- Added safety:
+  - Auto-removal capped at 20% of alliance per run
+
+### Minister Management
+- Minister menu now shows channel configuration status with warnings
+- Pagination added to time-slot selection
+- Time Offset Mode added (:15 / :45 instead of :00 / :30)
+- Proper handling for right-to-left Arabic names
+- Channel list display modes:
+  - Available only
+  - Booked only
+  - Both
+
+### Minister Archive (New)
+- New Minister Archive cog added to Minister menu
+- Save full appointment lists & change logs to the database
+- Option to clear all active appointments & logs on archive save
+- Change logs now always saved to KvK database
+- Added controls to:
+  - View archives
+  - Post archived lists to a channel
+  - Delete archives on demand
+- Archive features restricted to Global Admin
+
+### Gift Code
+- Added support for:
+  - VIP-only codes
+  - Minimum town center level codes
+- Added handling for reactivated gift codes:
+  - Reactivation clears previous redemption records
+- Made the Gift Operations embed text more helpful for newer users
+- Added some post-redemption details about any failures that happened
+- API-received codes are now always validated locally on reception
+- Added configurable redemption order to prioritize alliances
+- The message about a new Gift code via API will now be posted to gift channels too
+- Consolidated the embeds sent to admin during manual all alliance redemption
+- Fixed inconclusive API validation not triggering auto-redemption
+
+### Register Feature (New)
+- Added `/register` command for self-registration
+- Users can select their alliance manually
+- Alternative to ID channel registration
+- Toggled via Other Features menu
+
+### Notification System (Major Overhaul)
+- New Setup Wizard cog to easily configure a batch of common event notifications
+- New Schedule Boards cog for displaying upcoming events
+- New Event Templates cog to help the wizard set up events
+- Improved Custom Notification creation with Event Type selection
+- Notifications now auto-delete (enabled by default, configurable):
+  - After the event duration is up
+  - Or after 60 minutes by default if duration is not set
+- Added new notification text variables:
+  - %n – Event Name
+  - %e – Event Time
+  - %d – Event Date
+  - %i – Event Emoji
+- Notification view enhanced:
+  - Shows Event Type & Next Occurrence
+  - Notification ID visually de-emphasized
+
+### Notification Schedule Boards
+- Dedicated cog for displaying upcoming events
+- Accessed via “Schedule Boards” button
+- Supports boards for:
+  - Channel-specific notifications
+  - Server-wide notifications
+- Boards auto-update:
+  - On event trigger
+  - On event update
+  - When events reach Today / <6h / <1h
+  - On bot startup
+- Integrated with the Setup Wizard
+- Supports pagination, filtering, timezone handling & auto-pinning
+
+### Notification Setup Wizard
+- Step 1: Channel, mention, timezone (default UTC), trigger times (default 10m, 5m, event time)
+- Step 2: Interactive event selection & configuration
+- Step 3: Full preview before creation
+- Step 4: Confirmation & optional Schedule Board creation
+- Supported events:
+  - Bear Trap
+  - Viking Vengeance
+  - Swordland Showdown
+  - Tri-Alliance Clash
+  - Fortress Battle
+  - Eternity's Reach
+  - Castle Battle
+  - KvK
+  - Caesares Fury Bosses
+  - Daily Reset
+- Re-running the wizard updates existing wizard-created notifications in that channel
+- Automatic next-occurrence calculation based on global event schedules
+
+### Notification Templates
+- New “Browse Templates” menu
+- Pre-built templates for all events (title, description, thumbnail)
+- Fully customizable, adjust them to your liking
+- Live embed preview as you make changes
+
+### Maintenance
+- Various code optimizations and dead-code cleanup
+- Squashed many other bugs (see closed issues)
 
 ##  🛠️ Version v1.3.0 (Current)
 

@@ -75,7 +75,7 @@ class BearTrapTemplates(commands.Cog):
             elif schedule_type == "global_weekly":
                 repeat_config = {"type": "fixed_days", "days": [4]}  # Friday
             elif schedule_type == "global_biweekly":
-                if event_name == "Crazy Joe":
+                if event_name == "Viking Vengeance":
                     repeat_config = {"type": "custom"}  # Will be set by wizard
                 else:
                     repeat_config = {"type": "interval", "minutes": 20160}  # 2 weeks

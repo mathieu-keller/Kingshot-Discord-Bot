@@ -244,7 +244,7 @@ To restore:
 2. Replace your db/ folder contents with these files
 3. Restart the bot
 
-🤖 WOS Discord Bot Backup System
+🤖 Kingshot Discord Bot Backup System
 """
                         zf.writestr("README.txt", readme_content)
                 else:
@@ -270,7 +270,7 @@ To restore:
 2. Replace your db/ folder contents with these files
 3. Restart the bot
 
-🤖 WOS Discord Bot Backup System
+🤖 Kingshot Discord Bot Backup System
 """
                         zf.writestr("README.txt", readme_content)
                 
@@ -307,7 +307,7 @@ To restore:
 
 ⚠️ This backup expires in 30 days from Discord
 
-🤖 WOS Discord Bot Backup System
+🤖 Kingshot Discord Bot Backup System
 """
                             zf.writestr("README.txt", readme_content)
                     else:
@@ -335,7 +335,7 @@ To restore:
 
 ⚠️ This backup expires in 30 days from Discord
 
-🤖 WOS Discord Bot Backup System
+🤖 Kingshot Discord Bot Backup System
 """
                             zf.writestr("README.txt", readme_content)
                     

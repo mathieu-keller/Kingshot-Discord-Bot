@@ -1993,7 +1993,7 @@ class GiftOperations(commands.Cog):
                                 f"📝 **Channel:** <#{channel_id}>\n\n"
                                 f"✅ Channel has been configured for gift code monitoring.\n"
                                 f"Use **Channel History Scan** in Gift Code Settings to scan historical messages on-demand.\n"
-                                f"**Tip:** Follow the official WOS #giftcodes channel in your gift code channel to easily find new codes."
+                                f"**Tip:** Follow the official Kingshot #giftcodes channel in your gift code channel to easily find new codes."
                             ),
                             color=discord.Color.green()
                         )

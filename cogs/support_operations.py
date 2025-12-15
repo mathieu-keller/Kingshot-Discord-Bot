@@ -80,11 +80,11 @@ class SupportView(discord.ui.View):
     )
     async def about_project_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         about_embed = discord.Embed(
-            title="ℹ️ About Whiteout Project",
+            title="ℹ️ About Kingshot Project",
             description=(
                 "**Open Source Bot**\n"
                 "━━━━━━━━━━━━━━━━━━━━━━\n"
-                "This is an open source Discord bot for Whiteout Survival.\n"
+                "This is an open source Discord bot for Kingshot.\n"
                 "The project is community-driven and freely available for everyone.\n"
                 "**Repository:** [GitHub](https://github.com/kingshot-project/Kingshot-Discord-Bot)\n"
                 "**Community:** [Discord](https://discord.gg/apYByj6K2m)\n\n"

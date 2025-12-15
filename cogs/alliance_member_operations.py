@@ -794,8 +794,8 @@ class AllianceMemberOperations(commands.Cog):
                                     "• **Alliance** - Alliance name\n"
                                     "• **ID** - Member ID\n"
                                     "• **Name** - Member's nickname\n"
-                                    "• **FC Level** - Furnace level\n"
-                                    "• **State** - State ID"
+                                    "• **TC Level** - Town Center level\n"
+                                    "• **Kingdom** - Kingdom ID"
                                 ),
                                 color=discord.Color.blue()
                             )
@@ -816,8 +816,8 @@ class AllianceMemberOperations(commands.Cog):
                                     "**Available Columns:**\n"
                                     "• **ID** - Member ID\n"
                                     "• **Name** - Member's nickname\n"
-                                    "• **FC Level** - Furnace level\n"
-                                    "• **State** - State ID"
+                                    "• **TC Level** - Town Center level\n"
+                                    "• **Kingdom** - Kingdom ID"
                                 ),
                                 color=discord.Color.blue()
                             )
@@ -2579,11 +2579,10 @@ class MemberSelectView(discord.ui.View):
             options.append(discord.SelectOption(
                 label=f"{nickname[:50]}",
                 value=str(fid),
-                description=f"ID: {fid} | TG: {self.cog.level_mapping.get(furnace_lv, str(furnace_lv))}",
-                emoji="👤"
-            ) for fid, nickname, furnace_lv in current_members[:remaining_slots]
-        ]
-        options.extend(member_options)
+                description=f"ID: {fid} | TC: {self.cog.level_mapping.get(furnace_lv, str(furnace_lv))}",
+                emoji="✅" if is_selected else "👤",
+                default=is_selected
+            ))
 
         # Determine placeholder based on context (remove vs transfer)
         if self.is_remove_operation:

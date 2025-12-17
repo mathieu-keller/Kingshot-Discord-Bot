@@ -194,7 +194,7 @@ To run with automatic updates (for non-interactive environments):
 python main.py --autoupdate
 ```
 
-## 🛠️ Version v1.4.0 (Releasing Shortly...)
+## 🛠️ Version v1.4.0 (Current)
 
 ### Bot Core
 - Graceful shutdown with Ctrl+C handling implemented (no more confusing exit tracebacks)
@@ -207,6 +207,7 @@ python main.py --autoupdate
 - Documentation moved from README to Wiki
 - Docker image has been set up and auto-builds via CI on release
 - Various Docker deployment improvements and fixes (because Dom loves Docker 🐳)
+- Python venv is now required to run the bot to avoid dependency issues (can bypass with `--no-venv`)
 
 ### Attendance
 - Attendance marking has a new Multi-select UI (much faster to use)
@@ -331,7 +332,7 @@ python main.py --autoupdate
 - Various code optimizations and dead-code cleanup
 - Squashed many other bugs (see closed issues)
 
-##  🛠️ Version v1.3.0 (Current)
+##  🛠️ Version v1.3.0
 
 ### 📋 TL;DR Summary
 - 🖼️ Gift Codes are now shared and distributed via API

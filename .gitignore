@@ -12,3 +12,8 @@
 !install/*
 !fonts/
 !fonts/*
+!docker/
+!docker/*
+!.github/
+!.github/workflows/
+!.github/workflows/docker.yml

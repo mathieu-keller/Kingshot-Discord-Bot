@@ -8,7 +8,46 @@ import asyncio
 import json
 import traceback
 import time
+import re
 from .bear_event_types import get_event_types, get_event_icon
+
+
+def check_mention_placeholder_misuse(text: str, is_embed: bool = False) -> str | None:
+    """
+    Check if user typed a literal @mention instead of {tag}.
+    Returns a warning message if misuse detected, None otherwise.
+
+    Args:
+        text: The message text to check
+        is_embed: If True, warn on ALL @ mentions (including @everyone/@here)
+                  since they don't work in embed fields
+    """
+    # Skip if {tag} or @tag is already used correctly
+    if "{tag}" in text or "@tag" in text:
+        return None
+
+    if is_embed:
+        # In embeds, NO @ mentions work - warn on everything
+        pattern = r'@(\w+)'
+    else:
+        # In plain messages, @everyone/@here work - only warn on usernames/roles
+        pattern = r'@(?!everyone|here)(\w+)'
+
+    matches = re.findall(pattern, text)
+
+    if matches:
+        examples = ", ".join(f"@{m}" for m in matches[:3])
+        if is_embed:
+            return (
+                f"⚠️ You typed `{examples}` but mentions don't work inside embeds.\n"
+                f"Use `{{tag}}` instead - it will add the mention above the embed."
+            )
+        else:
+            return (
+                f"⚠️ You typed `{examples}` but this won't ping anyone.\n"
+                f"Use `{{tag}}` instead - it will be replaced with your configured mention."
+            )
+    return None
 
 class BearTrap(commands.Cog):
     def __init__(self, bot):
@@ -743,6 +782,8 @@ class BearTrap(commands.Cog):
                                     title = title.replace("%e", event_time)
                                     title = title.replace("%d", event_date)
                                     title = title.replace("%i", event_emoji)
+                                    if "{tag}" in title:
+                                        title = title.replace("{tag}", mention_text)
                                     if "@tag" in title:
                                         title = title.replace("@tag", mention_text)
                                     embed.title = title
@@ -765,6 +806,8 @@ class BearTrap(commands.Cog):
                                     description = description.replace("%e", event_time)
                                     description = description.replace("%d", event_date)
                                     description = description.replace("%i", event_emoji)
+                                    if "{tag}" in description:
+                                        description = description.replace("{tag}", mention_text)
                                     if "@tag" in description:
                                         description = description.replace("@tag", mention_text)
                                     embed.description = description
@@ -789,6 +832,8 @@ class BearTrap(commands.Cog):
                                     footer_text = footer_text.replace("%e", event_time)
                                     footer_text = footer_text.replace("%d", event_date)
                                     footer_text = footer_text.replace("%i", event_emoji)
+                                    if "{tag}" in footer_text:
+                                        footer_text = footer_text.replace("{tag}", mention_text)
                                     if "@tag" in footer_text:
                                         footer_text = footer_text.replace("@tag", mention_text)
                                     embed.set_footer(text=footer_text)
@@ -801,6 +846,8 @@ class BearTrap(commands.Cog):
                                     author_text = author_text.replace("%e", event_time)
                                     author_text = author_text.replace("%d", event_date)
                                     author_text = author_text.replace("%i", event_emoji)
+                                    if "{tag}" in author_text:
+                                        author_text = author_text.replace("{tag}", mention_text)
                                     if "@tag" in author_text:
                                         author_text = author_text.replace("@tag", mention_text)
                                     embed.set_author(name=author_text)
@@ -808,7 +855,8 @@ class BearTrap(commands.Cog):
                                 if embed.to_dict():
                                     if mention_text:
                                         mention_message = embed_data.get("mention_message", "")
-                                        if mention_message and "@tag" in mention_message:
+                                        if mention_message and ("{tag}" in mention_message or "@tag" in mention_message):
+                                            mention_message = mention_message.replace("{tag}", mention_text)
                                             mention_message = mention_message.replace("@tag", mention_text)
                                             mention_message = mention_message.replace("%t", time_text)
                                             mention_message = mention_message.replace("{time}", time_text)
@@ -858,8 +906,10 @@ class BearTrap(commands.Cog):
                     if actual_description.startswith("PLAIN_MESSAGE:"):
                         actual_description = actual_description.replace("PLAIN_MESSAGE:", "", 1)
 
-                    if "@tag" in actual_description or "%t" in actual_description or "{time}" in actual_description or "%n" in actual_description or "%e" in actual_description or "%d" in actual_description or "%i" in actual_description:
+                    if "{tag}" in actual_description or "@tag" in actual_description or "%t" in actual_description or "{time}" in actual_description or "%n" in actual_description or "%e" in actual_description or "%d" in actual_description or "%i" in actual_description:
                         message = actual_description
+                        if "{tag}" in message:
+                            message = message.replace("{tag}", mention_text)
                         if "@tag" in message:
                             message = message.replace("@tag", mention_text)
                         if "%t" in message:
@@ -1616,7 +1666,7 @@ class EmbedEditorView(discord.ui.View):
 
             content = (
                 "📝 **Embed Editor**\n\n"
-                "**Available variables:** `%t` (time left), `%n` (name), `%e` (event time), `%d` (date), `%i` (emoji), `@tag` (mention)\n\n"
+                "**Available variables:** `{tag}` (mention), `{time}` (time left), `%n` (name), `%e` (event time), `%d` (date), `%i` (emoji)\n\n"
                 f"**Preview values:** {example_emoji} {example_name} at {example_event_time} on {example_date}, {example_time} remaining\n\n"
                 f"**Mention Message Preview:**\n{mention_preview}\n"
             )
@@ -1901,7 +1951,7 @@ class MessageTypeView(discord.ui.View):
         modal = discord.ui.Modal(title="Message Content")
         message_content = discord.ui.TextInput(
             label="Message",
-            placeholder="Enter notification message... You can use @tag for mentions and %t or {time} for time",
+            placeholder="Variables: {tag}=mention, {time}=time left, %n=name, %e=time, %d=date, %i=emoji",
             style=discord.TextStyle.paragraph,
             required=True,
             max_length=2000
@@ -1909,16 +1959,34 @@ class MessageTypeView(discord.ui.View):
         modal.add_item(message_content)
 
         async def modal_submit(modal_interaction):
-            channels = interaction.guild.text_channels
-            await self.cog.show_channel_selection(
-                modal_interaction,
-                self.start_date,
-                self.hour,
-                self.minute,
-                self.timezone,
-                f"PLAIN_MESSAGE:{message_content.value}",
-                channels
-            )
+            # Check for @ mention misuse and show warning (non-blocking)
+            warning = check_mention_placeholder_misuse(message_content.value, is_embed=False)
+            if warning:
+                await modal_interaction.response.defer()
+                await modal_interaction.followup.send(warning, ephemeral=True)
+                # Continue with the flow anyway
+                channels = interaction.guild.text_channels
+                await self.cog.show_channel_selection(
+                    modal_interaction,
+                    self.start_date,
+                    self.hour,
+                    self.minute,
+                    self.timezone,
+                    f"PLAIN_MESSAGE:{message_content.value}",
+                    channels,
+                    use_followup=True
+                )
+            else:
+                channels = interaction.guild.text_channels
+                await self.cog.show_channel_selection(
+                    modal_interaction,
+                    self.start_date,
+                    self.hour,
+                    self.minute,
+                    self.timezone,
+                    f"PLAIN_MESSAGE:{message_content.value}",
+                    channels
+                )
 
         modal.on_submit = modal_submit
         await interaction.response.send_modal(modal)
@@ -2005,7 +2073,7 @@ class EventTypeSelectView(discord.ui.View):
 
             content = (
                 "📝 **Embed Editor**\n\n"
-                "**Available variables:** `%t` (time left), `%n` (name), `%e` (event time), `%d` (date), `%i` (emoji), `@tag` (mention)\n\n"
+                "**Available variables:** `{tag}` (mention), `{time}` (time left), `%n` (name), `%e` (event time), `%d` (date), `%i` (emoji)\n\n"
                 f"**Preview values:** {example_emoji} {example_name} at {example_event_time} on {example_date}, {example_time} remaining"
             )
 

@@ -12,8 +12,6 @@ Kingshot Discord Bot that supports alliance management, event reminders and atte
 
  - If you run your bot non-interactively, for example as a systemd service on Linux, you should run `--autoupdate` to prevent the bot from using the interactive update prompt.
 
-- ⚠️ If you run your bot on Windows, there is a known issue with onnxruntime + an outdated Visual C++ library. To overcome this, install [the latest version of Visual C++](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170) in both 32-bit and 64-bit variants, and then run `main.py` again.
-
 ## ☁️ Hosting Providers
 
 **⚠️ This is a self-hosted bot!** That means you will need to run the bot somewhere. You could do this on your own PC if you like, but then it will stop running if you shut the PC down. Luckily there are some other hosting options available which you can find on [our Discord server](https://discord.gg/apYByj6K2m) under the `#host-setup` channel, many of which are free.

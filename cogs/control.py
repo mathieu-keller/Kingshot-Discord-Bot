@@ -74,18 +74,6 @@ class Control(commands.Cog):
         self.cursor_settings.execute("SELECT COUNT(*) FROM auto")
         if self.cursor_settings.fetchone()[0] == 0:
             self.cursor_settings.execute("INSERT INTO auto (value) VALUES (1)")
-
-        # Create invalid_id_tracker table for 3-strike removal system
-        self.cursor_settings.execute("""
-            CREATE TABLE IF NOT EXISTS invalid_id_tracker (
-                fid TEXT PRIMARY KEY,
-                alliance_id TEXT,
-                nickname TEXT,
-                fail_count INTEGER DEFAULT 1,
-                first_failure TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_failure TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
         self.conn_settings.commit()
         
         # Add control settings columns to alliancesettings if they don't exist
@@ -105,13 +93,26 @@ class Control(commands.Cog):
             """)
         
         self.conn_alliance.commit()
-        
+
+        # Create invalid_id_tracker table for 3-strike removal system
+        self.cursor_settings.execute("""
+            CREATE TABLE IF NOT EXISTS invalid_id_tracker (
+                fid TEXT PRIMARY KEY,
+                alliance_id TEXT,
+                nickname TEXT,
+                fail_count INTEGER DEFAULT 1,
+                first_failure TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_failure TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self.conn_settings.commit()
+
         self.db_lock = asyncio.Lock()
         self.proxies = self.load_proxies()
         self.alliance_tasks = {}
         self.is_running = {}
         self.monitor_started = False
-        
+
         # Initialize login handler for centralized queue management
         self.login_handler = LoginHandler()
 
@@ -136,8 +137,8 @@ class Control(commands.Cog):
     def get_transfer_notification_setting(self, alliance_id):
         """Get the notify_on_transfer setting for a specific alliance"""
         self.cursor_alliance.execute("""
-            SELECT notify_on_transfer 
-            FROM alliancesettings 
+            SELECT notify_on_transfer
+            FROM alliancesettings
             WHERE alliance_id = ?
         """, (alliance_id,))
         result = self.cursor_alliance.fetchone()
@@ -180,6 +181,26 @@ class Control(commands.Cog):
         )
         result = self.cursor_settings.fetchone()
         return result[0] if result else 0
+
+    def is_connection_error(self, error_msg: str) -> bool:
+        """Check if error message indicates a network/connection issue vs actual player error"""
+        network_indicators = [
+            'timeout',
+            'connection',
+            'connect',
+            'timed out',
+            'refused',
+            'unreachable',
+            'reset',
+            'dns',
+            'network',
+            'socket',
+            'ssl',
+            'certificate',
+            'host'
+        ]
+        error_lower = error_msg.lower()
+        return any(indicator in error_lower for indicator in network_indicators)
 
     async def fetch_user_data(self, fid, proxy=None):
         """Fetch user data using the centralized login handler"""
@@ -304,6 +325,7 @@ class Control(commands.Cog):
 
         furnace_changes, nickname_changes, kid_changes, check_fail_list = [], [], [], []
         members_to_remove = []  # Track members that should be removed for bulk check
+        connection_errors = []  # Track network/connection issues separately (not invalid members)
 
         def safe_list(input_list): # Avoid issues with list indexing
             if not isinstance(input_list, list):
@@ -340,7 +362,6 @@ class Control(commands.Cog):
                         
                         # Check if this is a permanently invalid ID (not found)
                         if error_msg == 'not_found':
-                            # Use 3-strike counter system - only remove after 3 consecutive failures
                             fail_count = self.increment_invalid_counter(fid, alliance_id, old_nickname)
 
                             if fail_count >= 3:
@@ -350,11 +371,15 @@ class Control(commands.Cog):
                             else:
                                 # Not enough failures yet - just monitor
                                 check_fail_list.append(f"⚠️ `{fid}` ({old_nickname}) - Player not found ({fail_count}/3 - monitoring)")
+                        elif self.is_connection_error(error_msg):
+                            # Network/connection issue - NOT an invalid member, just a connection issue
+                            connection_errors.append(f"⚠️ `{fid}` ({old_nickname}) - Connection issue (will retry next check)")
+                            self.logger.warning(f"Connection issue checking ID {fid}: {error_msg}")
                         else:
-                            # For other errors, just report without removing
+                            # For other API errors, report without removing
                             check_fail_list.append(f"❌ `{fid}` - {error_msg}")
                             self.logger.warning(f"Failed to check ID {fid}: {error_msg}")
-                        
+
                         checked_users += 1
                     elif 'data' in data:
                         # Process successful response
@@ -374,7 +399,7 @@ class Control(commands.Cog):
                                 self.conn_users.commit()
 
                             if old_kid != new_kid:
-                                kid_changes.append(f"👤 {old_nickname} has transferred to a new kingdom\n🔄 Old State: {old_kid}\n🆕 New State: {new_kid}")
+                                kid_changes.append(f"👤 {old_nickname} has transferred to a new kingdom\n🔄 Old Kingdom: {old_kid}\n🆕 New Kingdom: {new_kid}")
                                 
                                 # Check if auto-removal is enabled for this alliance
                                 auto_remove = self.get_auto_remove_setting(alliance_id)
@@ -483,7 +508,7 @@ class Control(commands.Cog):
         end_time = datetime.now()
         duration = end_time - start_time
 
-        if furnace_changes or nickname_changes or kid_changes or check_fail_list:
+        if furnace_changes or nickname_changes or kid_changes or check_fail_list or connection_errors:
             if furnace_changes:
                 await self.send_embed(
                     channel=channel,
@@ -514,17 +539,27 @@ class Control(commands.Cog):
             if check_fail_list:
                 # Count auto-removed entries
                 auto_removed_count = sum(1 for item in check_fail_list if "Auto-removed" in item)
-                
+
                 footer_text = f"📊 Total Issues: {len(check_fail_list)}"
                 if auto_removed_count > 0:
                     footer_text += f" | 🗑️ Auto-removed: {auto_removed_count}"
-                
+
                 await self.send_embed(
                     channel=channel,
                     title=f"❌ **{alliance_name}** Invalid Members Detected",
                     description=safe_list(check_fail_list),
                     color=discord.Color.red(),
                     footer=footer_text
+                )
+
+            if connection_errors:
+                # Connection issues are informational - members NOT removed
+                await self.send_embed(
+                    channel=channel,
+                    title=f"⚠️ **{alliance_name}** Connection Issues",
+                    description=safe_list(connection_errors),
+                    color=discord.Color.orange(),
+                    footer=f"📊 {len(connection_errors)} connection issue(s) - Members NOT affected"
                 )
 
             embed.color = discord.Color.green()
@@ -553,6 +588,10 @@ class Control(commands.Cog):
             if check_failure_count > 0:
                 changes_text += f"\n❌ {check_failure_count} check failures"
 
+            # Add connection issues count if any (informational only)
+            if connection_errors:
+                changes_text += f"\n⚠️ {len(connection_errors)} connection issue(s)"
+
             embed.add_field(
                 name="📈 Total Changes",
                 value=changes_text,
@@ -580,7 +619,7 @@ class Control(commands.Cog):
         # Update ephemeral message at completion if provided
         if interaction_message:
             try:
-                changes_detected = bool(furnace_changes or nickname_changes or kid_changes or check_fail_list)
+                changes_detected = bool(furnace_changes or nickname_changes or kid_changes or check_fail_list or connection_errors)
                 
                 if is_batch and batch_info:
                     # Check if this is the last alliance in the batch

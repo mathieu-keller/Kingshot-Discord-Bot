@@ -146,7 +146,7 @@ EVENT_CONFIG = {
         "description": "Daily Reset in %t - make sure you have done your dailies and arena battles!",
         "default_notification_type": 2,
         "image_url": "",
-        "thumbnail_url": "https://i.imgur.com/1qeelNq.png",
+        "thumbnail_url": "https://i.imgur.com/rOyR85Y.png",
     },
 }
 

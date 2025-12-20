@@ -13,7 +13,7 @@ EVENT_CONFIG = {
         "time_slots": "5min",  # Can be scheduled in 5-minute increments
         "instances_per_cycle": 2,  # Trap 1 and 2
         "image_url": "",  # Placeholder for event image
-        "thumbnail_url": "https://i.imgur.com/tVExgj4.png",
+        "thumbnail_url": "https://i.imgur.com/2s9QX4T.png",
     },
     "Viking Vengeance": {
         "emoji": "🔥",
@@ -26,7 +26,7 @@ EVENT_CONFIG = {
         "default_notification_type": 2,
         "time_slots": "5min",
         "image_url": "",
-        "thumbnail_url": "https://i.imgur.com/qwNM7Br.png",
+        "thumbnail_url": "https://i.imgur.com/cGrsmqk.png",
     },
     "Swordland Showdown": {
         "emoji": "⚔️",
@@ -44,7 +44,7 @@ EVENT_CONFIG = {
         "default_notification_type": 2,
         "instances_per_cycle": 2,  # Legion 1 and Legion 2
         "image_url": "",
-        "thumbnail_url": "https://i.imgur.com/u3pmvW1.png",
+        "thumbnail_url": "https://i.imgur.com/QBALQsN.png",
     },
     "Tri-Alliance Clash": {
         "emoji": "🔱",
@@ -62,7 +62,7 @@ EVENT_CONFIG = {
         "default_notification_type": 2,
         "instances_per_cycle": 2,
         "image_url": "",
-        "thumbnail_url": "https://i.imgur.com/eKiHavB.png",
+        "thumbnail_url": "https://i.imgur.com/vawkulW.png",
     },
     "Fortress Battle": {
         "emoji": "🏯",
@@ -86,7 +86,7 @@ EVENT_CONFIG = {
         "description": "The %e %n is opening soon! Come online and recall your troops if you are joining at this time.",
         "default_notification_type": 2,
         "image_url": "",
-        "thumbnail_url": "https://i.imgur.com/gC5S9Rt.png",
+        "thumbnail_url": "https://i.imgur.com/G12FyL1.png",
     },
     "Castle Battle": {
         "emoji": "🏰",
@@ -103,7 +103,7 @@ EVENT_CONFIG = {
         },
         "default_notification_type": 2,
         "image_url": "",
-        "thumbnail_url": "https://i.imgur.com/NPu9yFh.png",
+        "thumbnail_url": "https://i.imgur.com/i3RwgWT.png",
     },
     "KvK": {
         "emoji": "👑",
@@ -121,7 +121,7 @@ EVENT_CONFIG = {
         },
         "default_notification_type": 2,
         "image_url": "",
-        "thumbnail_url": "https://i.imgur.com/HUwpmTd.png",
+        "thumbnail_url": "https://i.imgur.com/P4MLrJF.png",
     },
     "Caesares Fury Bosses": {
         "emoji": "⚡",
@@ -136,7 +136,7 @@ EVENT_CONFIG = {
         "description": "%n boss is spawning in %t. Prepare to send only one march as instructed!",
         "default_notification_type": 2,
         "image_url": "",
-        "thumbnail_url": "https://i.imgur.com/zb6y3Dg.png",
+        "thumbnail_url": "https://i.imgur.com/sDOqARi.png",
     },
     "Daily Reset": {
         "emoji": "🔄",

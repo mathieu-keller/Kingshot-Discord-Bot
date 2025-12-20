@@ -3612,7 +3612,7 @@ class GiftOperations(commands.Cog):
                         # Define user-friendly messages for each error type
                         error_descriptions = {
                             "TOO_POOR_SPEND_MORE": "💸 **{count}** members failed to spend enough to reach VIP12.",
-                            "TOO_SMALL_SPEND_MORE": "🔥 **{count}** members failed due to insufficient furnace level.",
+                            "TOO_SMALL_SPEND_MORE": "🏰 **{count}** members failed due to insufficient Town Center level.",
                             "TIMEOUT_RETRY": "⏱️ **{count}** members were staring into the void, until the void finally timed out on them.",
                             "LOGIN_EXPIRED_MID_PROCESS": "🔒 **{count}** members login failed mid-process. How'd that even happen?",
                             "LOGIN_FAILED": "🔐 **{count}** members failed due to login issues. Try logging it off and on again!",

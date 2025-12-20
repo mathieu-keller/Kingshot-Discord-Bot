@@ -11,7 +11,6 @@ import time
 import re
 from .bear_event_types import get_event_types, get_event_icon
 
-
 def check_mention_placeholder_misuse(text: str, is_embed: bool = False) -> str | None:
     """
     Check if user typed a literal @mention instead of {tag}.

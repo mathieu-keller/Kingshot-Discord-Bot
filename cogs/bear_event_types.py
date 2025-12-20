@@ -123,7 +123,7 @@ EVENT_CONFIG = {
         "image_url": "",
         "thumbnail_url": "https://i.imgur.com/P4MLrJF.png",
     },
-    "Caesares Fury Bosses": {
+    "Caesares Fury": {
         "emoji": "⚡",
         "duration_minutes": 60,  # Each boss session ~1 hour
         "schedule_type": "global_4weekly_multiday",
@@ -146,7 +146,7 @@ EVENT_CONFIG = {
         "description": "Daily Reset in %t - make sure you have done your dailies and arena battles!",
         "default_notification_type": 2,
         "image_url": "",
-        "thumbnail_url": "https://i.imgur.com/rOyR85Y.png",
+        "thumbnail_url": "https://i.imgur.com/7xcOnrj.png",
     },
 }
 

@@ -79,7 +79,7 @@ class BearTrapWizard(commands.Cog):
                 "**The events you can configure include:**\n"
                 "• Bear Trap (Trap 1 & 2)\n"
                 "• Viking Vengeance\n"
-                "• Caesares Fury Bosses\n"
+                "• Caesares Fury\n"
                 "• Swordland Showdown\n"
                 "• Tri-Alliance Clash\n"
                 "• Fortress Battle\n"
@@ -160,7 +160,7 @@ class WizardSession:
             "Eternity's Reach": self.frostfire_data,
             "Castle Battle": self.sunfire_data,
             "KvK": self.svs_data,
-            "Caesares Fury Bosses": self.mercenary_bosses_data,
+            "Caesares Fury": self.mercenary_bosses_data,
             "Daily Reset": self.daily_reset_data
         }
         return mapping.get(event_type, {})
@@ -310,7 +310,7 @@ class WizardSession:
                     "phase": notif.get("instance_identifier")
                 })
 
-        elif event_type == "Caesares Fury Bosses":
+        elif event_type == "Caesares Fury":
             if "bosses" not in self.mercenary_bosses_data:
                 self.mercenary_bosses_data["bosses"] = []
             for notif in notifications:
@@ -864,7 +864,7 @@ class EventSelectionHubView(discord.ui.View):
         self.event_types = [
             "Bear Trap",
             "Viking Vengeance",
-            "Caesares Fury Bosses",
+            "Caesares Fury",
             "Swordland Showdown",
             "Tri-Alliance Clash",
             "Fortress Battle",
@@ -995,7 +995,7 @@ class EventConfigRouter:
             "Eternity's Reach": EternitysReachConfigView(self.cog, self.session, self.hub_view),
             "Castle Battle": SunfireConfigView(self.cog, self.session, self.hub_view),
             "KvK": KvKConfigView(self.cog, self.session, self.hub_view),
-            "Caesares Fury Bosses": CaesaresFuryConfigView(self.cog, self.session, self.hub_view),
+            "Caesares Fury": CaesaresFuryConfigView(self.cog, self.session, self.hub_view),
             "Daily Reset": DailyResetConfigView(self.cog, self.session, self.hub_view)
         }
 
@@ -1740,7 +1740,7 @@ class KvKConfigView(PhaseToggleConfigView):
         super().__init__(cog, session, hub_view, "KvK", "svs_data", phases)
 
 class CaesaresFuryConfigView(discord.ui.View):
-    """Configuration for Caesares Fury Bosses (up to 5 instances during 3-day window)"""
+    """Configuration for Caesares Fury (up to 5 instances during 3-day window)"""
     def __init__(self, cog: BearTrapWizard, session: WizardSession, hub_view: EventSelectionHubView):
         super().__init__(timeout=3600)
         self.cog = cog
@@ -1759,10 +1759,10 @@ class CaesaresFuryConfigView(discord.ui.View):
                 })
 
     async def show(self, interaction: discord.Interaction):
-        """Show Caesares Fury Bosses configuration"""
-        icon = get_event_icon("Caesares Fury Bosses")
-        config = get_event_config("Caesares Fury Bosses")
-        next_date = calculate_next_occurrence("Caesares Fury Bosses")
+        """Show Caesares Fury configuration"""
+        icon = get_event_icon("Caesares Fury")
+        config = get_event_config("Caesares Fury")
+        next_date = calculate_next_occurrence("Caesares Fury")
 
         # Calculate the 3-day window
         window_text = "N/A"
@@ -1782,9 +1782,9 @@ class CaesaresFuryConfigView(discord.ui.View):
             boss_list = "*No bosses scheduled yet*"
 
         embed = discord.Embed(
-            title=f"{icon} Configure Caesares Fury Bosses",
+            title=f"{icon} Configure Caesares Fury",
             description=(
-                f"Caesares Fury Bosses occur **every 4 weeks during a 3-day window**.\n\n"
+                f"Caesares Fury occur **every 4 weeks during a 3-day window**.\n\n"
                 f"**Next Event Window:** {window_text}\n"
                 f"**Duration:** 3 consecutive days\n\n"
                 f"You can schedule **up to 5 Caesares Fury bosses** at any time during the 3-day window.\n"
@@ -1890,7 +1890,7 @@ class CaesaresFuryConfigView(discord.ui.View):
             "bosses": self.boss_times  # List of {day, hour, minute}
         }
         # Mark as configured and return to hub
-        self.session.mark_event_configured("Caesares Fury Bosses")
+        self.session.mark_event_configured("Caesares Fury")
         await self.hub_view.show(interaction)
 
 class CaesaresFuryBossTimeModal(discord.ui.Modal, title="Add Caesares Fury Boss"):
@@ -2142,7 +2142,7 @@ class WizardPreviewView(discord.ui.View):
                         value=f"└ Times: {times_list}",
                         inline=False
                     )
-            elif event == "Caesares Fury Bosses" and data:
+            elif event == "Caesares Fury" and data:
                 bosses = data.get("bosses", [])
                 if bosses:
                     boss_lines = []
@@ -2210,8 +2210,8 @@ class WizardPreviewView(discord.ui.View):
                 return f"{hour:02d}:{minute:02d}"
             return instance_id
 
-        # Caesares Fury Bosses: boss_0 -> "Boss 1"
-        if event_name == "Caesares Fury Bosses" and instance_id.startswith("boss_"):
+        # Caesares Fury: boss_0 -> "Boss 1"
+        if event_name == "Caesares Fury" and instance_id.startswith("boss_"):
             try:
                 idx = int(instance_id.split("_")[1])
                 return f"Boss {idx + 1}"
@@ -2352,7 +2352,7 @@ class WizardPreviewView(discord.ui.View):
 
                 # Get event config for image/thumbnail URLs and calculate next occurrence
                 from .bear_event_types import get_event_config, calculate_next_occurrence
-                event_config = get_event_config(event_name)
+                event_config = get_event_config(event_name) or {}
 
                 # Calculate next occurrence for global events (returns None for custom events like Bear Trap)
                 event_next_occurrence = calculate_next_occurrence(event_name)
@@ -2640,7 +2640,7 @@ class WizardPreviewView(discord.ui.View):
                             display = self._get_instance_display_name(event_name, old_phase, notif.get("hour"), notif.get("minute"))
                             event_changes.setdefault(event_name, []).append((display, "disabled"))
 
-                elif event_name == "Caesares Fury Bosses":
+                elif event_name == "Caesares Fury":
                     # Boss times across 3-day window (repeats every 4 weeks)
                     repeat_minutes = 28 * 24 * 60
                     bosses = event_data.get("bosses", [])

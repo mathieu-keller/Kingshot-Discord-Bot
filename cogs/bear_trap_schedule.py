@@ -824,30 +824,28 @@ class BearTrapSchedule(commands.Cog):
             if "EMBED_MESSAGE:" in description:
                 # Get embed title
                 self.cursor.execute("""
-                    SELECT title FROM bear_notification_embeds
-                    WHERE notification_id = ?
-                """, (notif_id,))
+                                    SELECT title FROM bear_notification_embeds
+                                    WHERE notification_id = ?
+                                    """, (notif_id,))
                 embed_result = self.cursor.fetchone()
                 name = embed_result[0] if embed_result and embed_result[0] else "Event"
             elif "PLAIN_MESSAGE:" in description:
                 # Extract from plain message
                 name = description.split("PLAIN_MESSAGE:")[-1].split("|")[0].strip()
-                if len(name) > 30:
-                    name = name[:27] + "..."
             else:
-                name = description[:30] if len(description) > 30 else description
+                name = description
 
             # Replace all placeholders in the name (from templates)
             name = (name
-                .replace("%i", emoji)
-                .replace("%n", event_name)
-                .replace("%e", event_time_str)
-                .replace("%d", event_date_str)
-                .replace("%t", "")  # Time remaining doesn't make sense in schedule board title
-                .replace("{time}", "")
-                .replace("{tag}", "")  # Mentions don't make sense in schedule board title
-                .replace("@tag", "")
-            )
+                    .replace("%i", emoji)
+                    .replace("%n", event_name)
+                    .replace("%e", event_time_str)
+                    .replace("%d", event_date_str)
+                    .replace("%t", "")  # Time remaining doesn't make sense in schedule board title
+                    .replace("{time}", "")
+                    .replace("{tag}", "")  # Mentions don't make sense in schedule board title
+                    .replace("@tag", "")
+                    )
             # Clean up any double spaces from removed placeholders
             while "  " in name:
                 name = name.replace("  ", " ")
@@ -856,6 +854,10 @@ class BearTrapSchedule(commands.Cog):
             # Strip "Notification" suffix if present (for backwards compatibility)
             if name.endswith(" Notification"):
                 name = name[:-13]
+
+            # Truncate if too long (after replacements)
+            if len(name) > 30:
+                name = name[:27] + "..."
 
             # Build line: **time** - emoji name (avoid duplicate emoji if name already starts with it)
             if name.startswith(emoji):
